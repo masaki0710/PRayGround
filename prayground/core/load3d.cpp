@@ -16,16 +16,16 @@ namespace prayground {
 
     // -------------------------------------------------------------------------------
     void loadObj(
-        const fs::path& filepath, 
+        const fs::path& filepath,
         std::vector<Vec3f>& vertices,
-        std::vector<Face>& faces, 
-        std::vector<Vec3f>& normals,  
-        std::vector<Vec2f>& texcoords
+        std::vector<Face>& faces,
+        std::vector<Vec3f>& normals,
+        std::vector<Vec2f>& texcoords, 
+        bool triangulate
     )
     {
         tinyobj::ObjReaderConfig reader_config;
-        //reader_config.triangulate = true; // triangulate mesh
-        reader_config.triangulate = false;
+        reader_config.triangulate = triangulate; // triangulate mesh
         tinyobj::ObjReader reader;
 
         if (!reader.ParseFromFile(filepath.string(), reader_config))
@@ -50,7 +50,7 @@ namespace prayground {
             for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++)
             {
                 size_t fv = size_t(shapes[s].mesh.num_face_vertices[f]);
-                Face face{{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+                Face face{ {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
                 for (size_t v = 0; v < fv; v++)
                 {
                     // access to vertex
@@ -88,10 +88,11 @@ namespace prayground {
 
     void loadObj(
         const fs::path& filepath, 
-        TriangleMesh& mesh
+        TriangleMesh& mesh, 
+        bool triangulate
     )
     {
-        mesh.load(filepath);
+        mesh.load(filepath, triangulate);
     }
 
     // -------------------------------------------------------------------------------
@@ -103,12 +104,13 @@ namespace prayground {
         std::vector<Vec2f>& texcoords, 
         std::vector<uint32_t>& face_indices,
         std::vector<Attributes>& material_attribs, 
-        const fs::path& mtlpath = ""
+        const fs::path& mtlpath = "",
+        bool triangulate
     )
     {
         tinyobj::ObjReaderConfig reader_config;
         // trianglulate mesh
-        reader_config.triangulate = true; 
+        reader_config.triangulate = triangulate; 
         // .mth filepath
         std::string mtl_dir = pgGetDir(objpath).string();
         if (mtlpath.string() != "")
@@ -227,7 +229,8 @@ namespace prayground {
         const fs::path& objpath, 
         const fs::path& mtlpath, 
         TriangleMesh& mesh, 
-        std::vector<Attributes>& material_attribs
+        std::vector<Attributes>& material_attribs, 
+        bool triangulate
     )
     {
         std::vector<Vec3f> vertices;
@@ -236,7 +239,7 @@ namespace prayground {
         std::vector<Vec2f> texcoords;
         std::vector<uint32_t> face_indices;
 
-        loadObjWithMtl(objpath, vertices, faces, normals, texcoords, face_indices, material_attribs, mtlpath);
+        loadObjWithMtl(objpath, vertices, faces, normals, texcoords, face_indices, material_attribs, mtlpath, triangulate);
         mesh.addVertices(vertices);
         mesh.addFaces(faces, face_indices);
         mesh.addNormals(normals);
@@ -246,7 +249,8 @@ namespace prayground {
     void loadObjWithMtl(
         const fs::path& filepath, 
         TriangleMesh& mesh, 
-        std::vector<Attributes>& material_attribs
+        std::vector<Attributes>& material_attribs, 
+        bool triangulate
     )
     {
         std::vector<Vec3f> vertices;
@@ -255,7 +259,7 @@ namespace prayground {
         std::vector<Vec2f> texcoords;
         std::vector<uint32_t> face_indices;
 
-        loadObjWithMtl(filepath, vertices, faces, normals, texcoords, face_indices, material_attribs);
+        loadObjWithMtl(filepath, vertices, faces, normals, texcoords, face_indices, material_attribs, "", triangulate);
         mesh.addVertices(vertices);
         mesh.addFaces(faces, face_indices);
         mesh.addNormals(normals);

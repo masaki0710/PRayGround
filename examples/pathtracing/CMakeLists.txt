@@ -9,6 +9,7 @@ PRAYGROUND_add_executable(pathtracing target_name
     cuda/raygen.cu
     cuda/textures.cu
     cuda/util.cuh
+    OPTIONS -rdc true
 )
 
 target_compile_definitions(

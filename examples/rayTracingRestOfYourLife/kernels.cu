@@ -14,17 +14,19 @@ INLINE DEVICE SurfaceInteraction* getSurfaceInteraction()
     return reinterpret_cast<SurfaceInteraction*>( unpackPointer(u0, u1) ); 
 }
 
-static INLINE DEVICE void trace(
+static __forceinline__ __device__ void trace(
     OptixTraversableHandle handle, const Vec3f& ro, const Vec3f& rd,
-    float tmin, float tmax, SurfaceInteraction* si) 
+    float tmin, float tmax, uint32_t ray_type, SurfaceInteraction* si
+)
 {
     uint32_t u0, u1;
-    packPointer( si, u0, u1 );
-    optixTrace(handle, ro.toCUVec(), rd.toCUVec(),
-        tmin, tmax, 0.0f,
-        OptixVisibilityMask( 1 ), OPTIX_RAY_FLAG_NONE,
-        (uint32_t)RayType::RADIANCE, (uint32_t)RayType::N_RAY, (uint32_t)RayType::RADIANCE,
-        u0, u1 );
+    packPointer(si, u0, u1);
+    optixTrace(
+        handle, ro, rd, tmin, tmax, 0.0f,
+        OptixVisibilityMask(1),
+        OPTIX_RAY_FLAG_NONE, ray_type, 2, ray_type,
+        u0, u1
+    );
 }
 
 static INLINE DEVICE bool shadowTrace(
@@ -32,12 +34,20 @@ static INLINE DEVICE bool shadowTrace(
     float tmin, float tmax)
 {
     uint32_t hit = 0u;
-    optixTrace(handle, ro.toCUVec(), rd.toCUVec(),
+    optixTrace(handle, ro, rd,
         tmin, tmax, 0.0f,
         OptixVisibilityMask(1), OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
         (uint32_t)RayType::SHADOW, (uint32_t)RayType::N_RAY, (uint32_t)RayType::SHADOW,
         hit);
     return static_cast<bool>(hit);
+}
+
+__device__ inline void copySurfaceInfo(SurfaceInfo* dst, const SurfaceInfo* src) {
+    dst->data = src->data;
+    dst->callable_id = src->callable_id;
+    dst->type = src->type;
+    dst->use_bumpmap = src->use_bumpmap;
+    dst->bumpmap = src->bumpmap;
 }
 
 // Raygen ----------------------------------------------------------------
@@ -54,7 +64,7 @@ static __forceinline__ __device__ float powerHeuristic(const float pdf1, const f
 
 #define NEE 0
 #define MIS 1
-#define PT 0
+#define MRT 0
 extern "C" GLOBAL void __raygen__pinhole()
 {
     const RaygenData* raygen = reinterpret_cast<RaygenData*>(optixGetSbtDataPointer());
@@ -86,47 +96,58 @@ extern "C" GLOBAL void __raygen__pinhole()
         si.emission = Vec3f(0.0f);
         si.albedo = Vec3f(0.0f);
         si.trace_terminate = false;
+        SurfaceInfo surface_info;
+        surface_info.type = SurfaceType::None;
+        si.surface_info = &surface_info;
 
         float tmax = raygen->camera.farclip / dot(rd, normalize(raygen->camera.lookat - ro));
 
         int depth = 0;
         for ( ;; ) {
-
             if ( depth >= params.max_depth )
 				break;
 
-            trace(params.handle, ro, rd, 0.01f, tmax, &si);
+            // Russian roulette
+            if (depth >= 3) {
+                float max_throughput = fmaxf(throughput.x(), fmaxf(throughput.y(), throughput.z()));
+                float continue_prob = fminf(0.95f, max_throughput);
+
+                if (rnd(si.seed) > continue_prob)
+                    break;
+                throughput /= continue_prob;
+            }
+
+            trace(params.handle, ro, rd, 0.01f, tmax, 0, &si);
 
             if (si.trace_terminate) {
                 result += si.emission * throughput;
                 break;
             }
 
-            SurfaceInfo surface_info = si.surface_info[0];
-
             // Get emission from area emitter
-            if ( surface_info.type == SurfaceType::AreaEmitter )
+            if ( si.surface_info->type == SurfaceType::AreaEmitter )
             {
                 // Evaluating emission from emitter
                 optixDirectCall<void, SurfaceInteraction*, void*>(
                     surface_info.callable_id.bsdf, &si, surface_info.data);
                 result += si.emission * throughput;
+
                 if (si.trace_terminate)
                     break;
             }
             // Specular sampling
-            else if (+(surface_info.type & SurfaceType::Delta))
+            else if (+(si.surface_info->type & SurfaceType::Delta))
             {
                 Vec3f scattered = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
                     surface_info.callable_id.sample, &si, surface_info.data);
                 si.wi = scattered;
 
                 Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
-                    surface_info.callable_id.bsdf, &si, surface_info.data, Vec3f{});
+                    surface_info.callable_id.bsdf, &si, surface_info.data, si.wi);
                 throughput *= bsdf;
             }
             // Rough surface sampling with applying MIS
-            else if ( +(surface_info.type & (SurfaceType::Rough | SurfaceType::Diffuse)) )
+            else if ( +(si.surface_info->type & SurfaceType::Rough) )
             {
                 uint32_t seed = si.seed;
                 AreaEmitterInfo light;
@@ -141,12 +162,7 @@ extern "C" GLOBAL void __raygen__pinhole()
                     surface_info.callable_id.sample, &si, surface_info.data);
 #if NEE
                 float weight = 0.0f;
-
-                float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
-                    surface_info.callable_id.pdf, &si, surface_info.data, scattered);
-
                 si.wi = scattered;
-                pdf = bsdf_pdf;
 
                 if (params.num_lights > 0)
                 {
@@ -155,20 +171,28 @@ extern "C" GLOBAL void __raygen__pinhole()
                     optixDirectCall<void, const AreaEmitterInfo&, const Vec3f&, LightInteraction&, uint32_t&>(
                         light.sample_id, light, si.p, li, seed);
                     Vec3f to_light = li.p - si.p;
+                    const Vec3f unit_wi = normalize(to_light);
                     const float dist_to_light = length(to_light);
+                    
+                    // Apply faceforward only for two-sided emitters
+                    const AreaEmitter::Data* area = reinterpret_cast<AreaEmitter::Data*>(light.surface_info->data);
+                    if (area->twosided)
+                        li.n = faceforward(li.n, -unit_wi, li.n);
+                    
+                    const float cos_theta_light = dot(li.n, -unit_wi);
+                    const float cos_theta_surface = dot(si.shading.n, unit_wi);
 
                     // For light pdf
-                    {
+                    if (cos_theta_light > 0.0f && cos_theta_surface > 0.0f){
                         const float t_shadow = dist_to_light - 1e-3f;
                         // Trace shadow ray
-                        const bool hit_object = shadowTrace(
+                        const bool occluded = shadowTrace(
                             params.handle, si.p, normalize(to_light), 1e-3f, t_shadow);
 
                         // Next Event Estimation
-                        if (!hit_object)
+                        if (!occluded)
                         {
-                            const Vec3f unit_wi = normalize(to_light);
-                            const Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
+                            Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
                                 surface_info.callable_id.bsdf, &si, surface_info.data, unit_wi);
 
                             // Calculate MIS weight
@@ -178,10 +202,11 @@ extern "C" GLOBAL void __raygen__pinhole()
                             light_si.wo = unit_wi;
                             light_si.surface_info = light.surface_info;
 
+                            // Get emittance from area light
                             optixDirectCall<void, SurfaceInteraction*, void*>(
-                                light_si.surface_info.bsdf_id, &light_si, light_si.surface_info.data);
+                                light_si.surface_info->callable_id.bsdf, &light_si, light_si.surface_info->data);
 
-                            result += light_si.emission * bsdf * throughput / li.pdf;
+                            result += light_si.emission * bsdf * cos_theta_surface * throughput / li.pdf;
                         }
                     }
 
@@ -206,6 +231,11 @@ extern "C" GLOBAL void __raygen__pinhole()
                         light.sample_id, light, si.p, li, seed);
                     Vec3f to_light = li.p - si.p;
                     const float dist_to_light = length(to_light);
+
+                    float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
+                    surface_info.callable_id.pdf, &si, surface_info.data, scattered);
+
+                    pdf = bsdf_pdf;
 
                     // For light pdf
                     {
@@ -250,7 +280,7 @@ extern "C" GLOBAL void __raygen__pinhole()
                         si.wi = scattered;
                         const Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
                             surface_info.callable_id.bsdf, &si, surface_info.data, si.wi);
-                        
+
                         float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
                             surface_info.callable_id.pdf, &si, surface_info.data, si.wi);
                         const float cos_theta = dot(-si.wi, li.n);
@@ -263,7 +293,7 @@ extern "C" GLOBAL void __raygen__pinhole()
                         throughput *= weight * bsdf / bsdf_pdf;
                     }
                 }
-#elif PT
+#elif MRT
                 si.wi = scattered;
 
                 // Evaluate PDF depends on BSDF
@@ -280,7 +310,7 @@ extern "C" GLOBAL void __raygen__pinhole()
             }
 
             // Make tmax large except for when the primary ray
-            tmax = 1e16f;
+            tmax = 1e8f;
             
             ro = si.p;
             rd = si.wi;
@@ -290,10 +320,10 @@ extern "C" GLOBAL void __raygen__pinhole()
     } while (--i);
 
     const unsigned int image_index = idx.y() * params.width + idx.x();
-
-    if (result.x() != result.x()) result.x() = 0.0f;
-    if (result.y() != result.y()) result.y() = 0.0f;
-    if (result.z() != result.z()) result.z() = 0.0f;
+    
+    if (!result.isValid()) {
+        result = 0.0f;
+    }
 
     Vec3f accum_color = result / static_cast<float>(params.samples_per_launch);
 
@@ -311,27 +341,20 @@ extern "C" GLOBAL void __raygen__pinhole()
 // Miss ----------------------------------------------------------------
 extern "C" GLOBAL void __miss__envmap()
 {
-    const auto* data = (MissData*)optixGetSbtDataPointer();
-    const auto* env = (EnvironmentEmitter::Data*)data->env_data;
-    auto* si = getSurfaceInteraction();
+    pgMissData* data = (pgMissData*)optixGetSbtDataPointer();
+    auto* env = reinterpret_cast<EnvironmentEmitter::Data*>(data->env_data);
+    SurfaceInteraction* si = getPtrFromTwoPayloads<SurfaceInteraction, 0>();
 
     Ray ray = getWorldRay();
 
-    const float a = dot(ray.d, ray.d);
-    const float half_b = dot(ray.o, ray.d);
-    const float c = dot(ray.o, ray.o) - 1e8f*1e8f;
-    const float discriminant = half_b * half_b - a*c;
+    Shading shading;
+    float t;
+    const Sphere::Data env_sphere{ Vec3f(0.0f), 1e8f };
+    pgIntersectionSphere(&env_sphere, ray, &shading, &t);
 
-    float sqrtd = sqrtf(discriminant);
-    float t = (-half_b + sqrtd) / a;
-
-    Vec3f p = normalize(ray.at(t));
-
-    const float phi = atan2(p.z(), p.x());
-    const float theta = asin(p.y());
-    const float u = 1.0f - (phi + math::pi) / (math::two_pi);
-    const float v = 1.0f - (theta + math::pi / 2.0f) / math::pi;
-    si->shading.uv = Vec2f(u, v);
+    si->shading.uv = shading.uv;
+    // Use sphere normal for environment map (should point outward along ray direction)
+    si->shading.n = shading.n;
     si->trace_terminate = true;
     si->surface_info->type = SurfaceType::None;
     si->emission = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
@@ -367,48 +390,40 @@ static __forceinline__ __device__ bool hitPlane(
     return false;
 }
 
-extern "C" GLOBAL void __intersection__plane()
-{
-    const auto* data = (HitgroupData*)optixGetSbtDataPointer();
-    const auto* plane = (Plane::Data*)data->shape_data;
-
-    const Vec2f min = plane->min;
-    const Vec2f max = plane->max;
+extern "C" GLOBAL void __intersection__plane() {
+    const HitgroupData* data = (HitgroupData*)optixGetSbtDataPointer();
+    const Plane::Data* plane = reinterpret_cast<Plane::Data*>(data->shape_data);
 
     Ray ray = getLocalRay();
 
-    const float t = -ray.o.y() / ray.d.y();
-
-    const float x = ray.o.x() + t * ray.d.x();
-    const float z = ray.o.z() + t * ray.d.z();
-
-    Vec2f uv((x - min.x()) / (max.x() - min.x()), (z - min.y()) / (max.y() - min.y()));
-
-    if (min.x() < x && x < max.x() && min.y() < z && z < max.y() && ray.tmin < t && t < ray.tmax)
-        optixReportIntersection(t, 0, Vec2f_as_ints(uv));
+    Shading shading = {};
+    float time = 0.0f;
+    if (pgIntersectionPlane(plane, ray, &shading, &time)) {
+        optixReportIntersection(time, 0, Vec3f_as_ints(shading.n), Vec2f_as_ints(shading.uv));
+    }
 }
 
 extern "C" GLOBAL void __closesthit__plane()
 {
-    const auto* data = (HitgroupData*)optixGetSbtDataPointer();
+    HitgroupData* data = reinterpret_cast<HitgroupData*>(optixGetSbtDataPointer());
 
     Ray ray = getWorldRay();
 
-    Vec3f local_n(0, 1, 0);
-    Vec3f world_n = optixTransformNormalFromObjectToWorldSpace(local_n.toCUVec());
+    Vec3f local_n = getVec3fFromAttribute<0>();
+    Vec3f world_n = optixTransformNormalFromObjectToWorldSpace(local_n);
     world_n = normalize(world_n);
-    Vec2f uv = getVec2fFromAttribute<0>();
+    Vec2f uv = getVec2fFromAttribute<3>();
 
-    SurfaceInteraction* si = getSurfaceInteraction();
+    SurfaceInteraction* si = getPtrFromTwoPayloads<SurfaceInteraction, 0>();
 
     si->p = ray.at(ray.tmax);
     si->shading.n = world_n;
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = uv;
-    si->surface_info = data->surface_info;
-    si->shading.dpdu = optixTransformNormalFromObjectToWorldSpace({1.0f, 0.0f, 0.0f});
-    si->shading.dpdv = optixTransformNormalFromObjectToWorldSpace({0.0f, 0.0f, 1.0f});
+    copySurfaceInfo(si->surface_info, data->surface_info);
+    si->shading.dpdu = optixTransformNormalFromObjectToWorldSpace(Vec3f(1.0f, 0.0f, 0.0f));
+    si->shading.dpdv = optixTransformNormalFromObjectToWorldSpace(Vec3f(0.0f, 0.0f, 1.0f));
 }
 
 extern "C" DEVICE void __direct_callable__sample_light_plane(
@@ -489,39 +504,16 @@ static __forceinline__ __device__ bool hitSphere(
     return true;
 }
 
-extern "C" GLOBAL void __intersection__sphere() 
-{
-    const auto* data = (HitgroupData*)optixGetSbtDataPointer();
-    const auto* sphere = (Sphere::Data*)data->shape_data;
-
-    const Vec3f center = sphere->center;
-    const float radius = sphere->radius;
+extern "C" GLOBAL void __intersection__sphere() {
+    const HitgroupData* data = (HitgroupData*)optixGetSbtDataPointer();
+    const Sphere::Data* sphere = reinterpret_cast<Sphere::Data*>(data->shape_data);
 
     Ray ray = getLocalRay();
 
-    const Vec3f oc = ray.o - center;
-    const float a = dot(ray.d, ray.d);
-    const float half_b = dot(oc, ray.d);
-    const float c = dot(oc, oc) - radius * radius;
-    const float discriminant = half_b * half_b - a * c;
-
-    if (discriminant > 0.0f) {
-        float sqrtd = sqrtf(discriminant);
-        float t1 = (-half_b - sqrtd) / a;
-        bool check_second = true;
-        if (t1 > ray.tmin && t1 < ray.tmax) {
-            Vec3f normal = normalize((ray.at(t1) - center) / radius);
-            check_second = false;
-            optixReportIntersection(t1, 0, Vec3f_as_ints(normal));
-        }
-
-        if (check_second) {
-            float t2 = (-half_b + sqrtd) / a;
-            if (t2 > ray.tmin && t2 < ray.tmax) {
-                Vec3f normal = normalize((ray.at(t2) - center) / radius);
-                optixReportIntersection(t2, 0, Vec3f_as_ints(normal));
-            }
-        }
+    Shading shading = {};
+    float time = 0.0f;
+    if (pgIntersectionSphere(sphere, ray, &shading, &time)) {
+        optixReportIntersection(time, 0, Vec3f_as_ints(shading.n), Vec2f_as_ints(shading.uv));
     }
 }
 
@@ -531,16 +523,17 @@ extern "C" GLOBAL void __closesthit__sphere() {
     Ray ray = getWorldRay();
 
     Vec3f local_n = getVec3fFromAttribute<0>();
-    Vec3f world_n = optixTransformNormalFromObjectToWorldSpace(local_n.toCUVec());
+    Vec3f world_n = optixTransformNormalFromObjectToWorldSpace(local_n);
     world_n = normalize(world_n);
+    Vec2f uv = getVec2fFromAttribute<3>();
 
     SurfaceInteraction* si = getSurfaceInteraction();
     si->p = ray.at(ray.tmax);
     si->shading.n = world_n;
     si->t = ray.tmax;
     si->wo = ray.d;
-    si->shading.uv = pgGetSphereUV(local_n);
-    si->surface_info = data->surface_info;
+    si->shading.uv = uv;
+    copySurfaceInfo(si->surface_info, data->surface_info);
 
     float phi = atan2(local_n.z(), local_n.x());
     if (phi < 0) phi += 2.0f * math::pi;
@@ -586,62 +579,33 @@ extern "C" DEVICE Vec3f __direct_callable__sample_light_sphere(
 // Triangle mesh -------------------------------------------------------------------------------
 extern "C" GLOBAL void __closesthit__mesh()
 {
-    const auto* data = (HitgroupData*)optixGetSbtDataPointer();
-    const auto* mesh = (TriangleMesh::Data*)data->shape_data;
+    HitgroupData* data = reinterpret_cast<HitgroupData*>(optixGetSbtDataPointer());
+    const TriangleMesh::Data* mesh = reinterpret_cast<TriangleMesh::Data*>(data->shape_data);
 
     Ray ray = getWorldRay();
-    
-    const int prim_id = optixGetPrimitiveIndex();
-    const Face face = mesh->faces[prim_id];
-    const float u = optixGetTriangleBarycentrics().x;
-    const float v = optixGetTriangleBarycentrics().y;
 
-    const Vec3f p0 = mesh->vertices[face.vertex_id.x()];
-    const Vec3f p1 = mesh->vertices[face.vertex_id.y()];
-    const Vec3f p2 = mesh->vertices[face.vertex_id.z()];
+    Shading shading = pgGetMeshShading(mesh, optixGetTriangleBarycentrics(), optixGetPrimitiveIndex());
 
-    const Vec2f texcoord0 = mesh->texcoords[face.texcoord_id.x()];
-    const Vec2f texcoord1 = mesh->texcoords[face.texcoord_id.y()];
-    const Vec2f texcoord2 = mesh->texcoords[face.texcoord_id.z()];
-    const Vec2f texcoords = (1-u-v)*texcoord0 + u*texcoord1 + v*texcoord2;
+    Vec3f mesh_n = shading.n;
+    Vec3f n(0.0f);
+    if (data->surface_info->use_bumpmap) {
+        n = optixDirectCall<Vec3f, Vec2f&, void*>(data->surface_info->bumpmap.prg_id, shading.uv, data->surface_info->bumpmap.data);
+        Onb onb(mesh_n);
+        onb.inverseTransform(n);
+        shading.n = normalize(n);
+    }
 
-    Vec3f n0 = mesh->normals[face.normal_id.x()];
-	Vec3f n1 = mesh->normals[face.normal_id.y()];
-	Vec3f n2 = mesh->normals[face.normal_id.z()];
+    // Transform shading from object to world space
+    shading.n = normalize(optixTransformNormalFromObjectToWorldSpace(shading.n));
+    shading.dpdu = normalize(optixTransformVectorFromObjectToWorldSpace(shading.dpdu));
+    shading.dpdv = normalize(optixTransformVectorFromObjectToWorldSpace(shading.dpdv));
 
-    // Linear interpolation of normal by barycentric coordinates.
-    Vec3f local_n = (1.0f-u-v)*n0 + u*n1 + v*n2;
-    Vec3f world_n = optixTransformNormalFromObjectToWorldSpace(local_n.toCUVec());
-    world_n = normalize(world_n);
-
-    auto* si = getSurfaceInteraction();
+    SurfaceInteraction* si = getPtrFromTwoPayloads<SurfaceInteraction, 0>();
     si->p = ray.at(ray.tmax);
-    si->shading.n = world_n;
+    si->shading = shading;
     si->t = ray.tmax;
     si->wo = ray.d;
-    si->shading.uv = texcoords;
-    si->surface_info = data->surface_info;
-
-    Vec3f dpdu, dpdv;
-    const Vec2f duv02 = texcoord0 - texcoord2, duv12 = texcoord1 - texcoord2;
-    const Vec3f dp02 = p0 - p2, dp12 = p1 - p2;
-    const float D = duv02.x() * duv12.y() - duv02.y() * duv12.x();
-    bool degenerateUV = abs(D) < 1e-8f;
-    if (!degenerateUV)
-    {
-        const float invD = 1.0f / D;
-        dpdu = (duv12.y() * dp02 - duv02.y() * dp12) * invD;
-        dpdv = (-duv12.x() * dp02 + duv02.x() * dp12) * invD;
-    }
-    if (degenerateUV || length(cross(dpdu, dpdv)) == 0.0f)
-    {
-        const Vec3f n = normalize(cross(p2 - p0, p1 - p0));
-        Onb onb(n);
-        dpdu = onb.tangent;
-        dpdv = onb.bitangent;
-    }
-    si->shading.dpdu = normalize(optixTransformNormalFromObjectToWorldSpace(dpdu.toCUVec()));
-    si->shading.dpdv = normalize(optixTransformNormalFromObjectToWorldSpace(dpdv.toCUVec()));
+    copySurfaceInfo(si->surface_info, data->surface_info);
 }
 
 extern "C" GLOBAL void __closesthit__shadow()

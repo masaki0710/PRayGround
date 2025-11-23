@@ -61,12 +61,11 @@ namespace prayground {
 
     struct SurfaceInfo 
     {
-        // Surfaceのデータ
+        // Surface data
         void* data;
 
-        // BSDFの重点サンプリングと評価関数用のCallables関数へのID
         SurfaceCallableID callable_id;
-    
+
         SurfaceType type;
 
         bool use_bumpmap = false;

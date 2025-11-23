@@ -144,8 +144,9 @@ void App::setup()
     // 画像ファイルはリポジトリには含まれていないので、任意の画像データを設定してください
     // Preparing texture for environment mapping (sphere mapping)
     // Since image file is not included in the repository, Please set your HDR image or use any other texture.
-    auto env_texture = make_shared<FloatBitmapTexture>("resources/image/drackenstein_quarry_4k.exr", bitmap_prg_id); 
-    //auto env_texture = make_shared<ConstantTexture>(Vec3f(0.0f), constant_prg_id);
+    auto env_bitmap = make_shared<FloatBitmap>("resources/image/drackenstein_quarry_4k.exr");
+    EnvmapSampleData envmap_sample_data = createEnvmapSampleDataOnDevice((Vec4f*)env_bitmap->data(), env_bitmap->width(), env_bitmap->height());
+    auto env_texture = make_shared<FloatBitmapTexture>(env_bitmap, bitmap_prg_id); 
 
     env_texture->copyToDevice();
     env = EnvironmentEmitter{env_texture};

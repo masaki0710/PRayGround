@@ -39,6 +39,9 @@ extern "C" __device__ void __raygen__pinhole()
         si.seed = seed;
         si.emission = Vec3f(0.0f);
         si.albedo = Vec3f(0.0f);
+        SurfaceInfo surface_info;
+        surface_info.type = SurfaceType::None;
+        si.surface_info = &surface_info;
         bool trace_terminate = false;
 
         float tmax = raygen->camera.farclip / dot(rd, normalize(raygen->camera.lookat - ro));
