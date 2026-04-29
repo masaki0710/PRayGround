@@ -168,7 +168,7 @@ void App::setup()
     sph_config = {
         .kernel_size = 7.0f, 
         .rest_density = 50.0f,
-        .external_force = Vec3f(0, -9.8f, 0),
+        .external_force = make_float3(0.0f, -9.8f, 0.0f),
         .time_step = 0.01f,
         .stiffness = 0.1f,
         .viscosity = 0.1f,

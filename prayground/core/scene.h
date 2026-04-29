@@ -59,7 +59,6 @@ namespace prayground {
             void free() {
                 shape->free();
                 for (auto m : materials) m->free();
-                instance.free();
             }
         };
 

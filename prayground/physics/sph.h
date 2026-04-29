@@ -59,7 +59,7 @@ namespace prayground {
     struct SPHConfig {
         float kernel_size;      // h
         float rest_density;     // rho0
-        Vec3f external_force;   // f_ext
+        float3 external_force;   // f_ext
         float time_step;        // dt
         float stiffness;        // k 
         float viscosity;        // mu

@@ -103,28 +103,28 @@ extern "C" __device__ void __raygen__pinhole()
             }
 
             // Get emission from area emitter
-            if ( si.surface_info.type == SurfaceType::AreaEmitter )
+            if ( si.surface_info->type == SurfaceType::AreaEmitter )
             {
                 // Evaluating emission from emitter
                 optixDirectCall<void, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.bsdf, &si, si.surface_info.data);
+                    si.surface_info->callable_id.bsdf, &si, si.surface_info->data);
                 result += si.emission * throughput;
                 if (si.trace_terminate)
                     break;
             }
             // Specular sampling
-            else if (+(si.surface_info.type & SurfaceType::Delta))
+            else if (+(si.surface_info->type & SurfaceType::Delta))
             {
                 Vec3f scattered = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.sample, &si, si.surface_info.data);
+                    si.surface_info->callable_id.sample, &si, si.surface_info->data);
                 si.wi = scattered;
 
                 Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
-                    si.surface_info.callable_id.bsdf, &si, si.surface_info.data, Vec3f{});
+                    si.surface_info->callable_id.bsdf, &si, si.surface_info->data, Vec3f{});
                 throughput *= bsdf;
             }
             // Rough surface sampling with applying MIS
-            else if ( +(si.surface_info.type & (SurfaceType::Rough | SurfaceType::Diffuse)) )
+            else if ( +(si.surface_info->type & (SurfaceType::Rough | SurfaceType::Diffuse)) )
             {
                 uint32_t seed = si.seed;
                 AreaEmitterInfo light;
@@ -136,12 +136,12 @@ extern "C" __device__ void __raygen__pinhole()
                 float pdf = 0.0f;
                 // BSDF sampling
                 Vec3f scattered = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.sample, &si, si.surface_info.data);
+                    si.surface_info->callable_id.sample, &si, si.surface_info->data);
 #if NEE
                 float weight = 0.0f;
 
                 float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
-                    si.surface_info.callable_id.pdf, &si, si.surface_info.data, scattered);
+                    si.surface_info->callable_id.pdf, &si, si.surface_info->data, scattered);
 
                 si.wi = scattered;
                 pdf = bsdf_pdf;
@@ -167,17 +167,17 @@ extern "C" __device__ void __raygen__pinhole()
                         {
                             const Vec3f unit_wi = normalize(to_light);
                             const Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
-                                si.surface_info.callable_id.bsdf, &si, si.surface_info.data, unit_wi);
+                                si.surface_info->callable_id.bsdf, &si, si.surface_info->data, unit_wi);
 
                             // Calculate MIS weight
                             SurfaceInteraction light_si;
                             light_si.shading.uv = li.uv;
                             light_si.shading.n = li.n;
                             light_si.wo = unit_wi;
-                            light_si.surface_info = light.surface_info;
+                            light_si.surface_info = const_cast<SurfaceInfo*>(&light.surface_info);
 
                             optixDirectCall<void, SurfaceInteraction*, void*>(
-                                light_si.surface_info.bsdf_id, &light_si, light_si.surface_info.data);
+                                light_si.surface_info->bsdf_id, &light_si, light_si.surface_info->data);
 
                             result += light_si.emission * bsdf * throughput / li.pdf;
                         }
@@ -187,10 +187,10 @@ extern "C" __device__ void __raygen__pinhole()
                     {
                         si.wi = scattered;
                         const Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
-                            si.surface_info.callable_id.bsdf, &si, si.surface_info.data, si.wi);
+                            si.surface_info->callable_id.bsdf, &si, si.surface_info->data, si.wi);
 
                         float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
-                            si.surface_info.callable_id.pdf, &si, si.surface_info.data, si.wi);
+                            si.surface_info->callable_id.pdf, &si, si.surface_info->data, si.wi);
 
                         throughput *= bsdf / bsdf_pdf;
                     }
@@ -217,10 +217,10 @@ extern "C" __device__ void __raygen__pinhole()
                         {
                             const Vec3f unit_wi = normalize(to_light);
                             const Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
-                                si.surface_info.callable_id.bsdf, &si, si.surface_info.data, unit_wi);
+                                si.surface_info->callable_id.bsdf, &si, si.surface_info->data, unit_wi);
 
                             float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
-                                si.surface_info.callable_id.pdf, &si, si.surface_info.data, unit_wi);
+                                si.surface_info->callable_id.pdf, &si, si.surface_info->data, unit_wi);
 
                             // convert unit of bsdf_pdf from [sr^-1] to [m^-2]
                             const float cos_theta = dot(-unit_wi, li.n);
@@ -234,10 +234,10 @@ extern "C" __device__ void __raygen__pinhole()
                             light_si.shading.uv = li.uv;
                             light_si.shading.n = li.n;
                             light_si.wo = unit_wi;
-                            light_si.surface_info = light.surface_info;
+                            light_si.surface_info = const_cast<SurfaceInfo*>(&light.surface_info);
 
                             optixDirectCall<void, SurfaceInteraction*, void*>(
-                                light_si.surface_info.callable_id.bsdf, &light_si, light_si.surface_info.data);
+                                light_si.surface_info->callable_id.bsdf, &light_si, light_si.surface_info->data);
                             
                             result += weight * light_si.emission * bsdf * throughput / li.pdf;
                         }
@@ -247,10 +247,10 @@ extern "C" __device__ void __raygen__pinhole()
                     {
                         si.wi = scattered;
                         const Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
-                            si.surface_info.callable_id.bsdf, &si, si.surface_info.data, si.wi);
+                            si.surface_info->callable_id.bsdf, &si, si.surface_info->data, si.wi);
                         
                         float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
-                            si.surface_info.callable_id.pdf, &si, si.surface_info.data, si.wi);
+                            si.surface_info->callable_id.pdf, &si, si.surface_info->data, si.wi);
                         const float cos_theta = dot(-si.wi, li.n);
                         const float sample_bsdf_pdf = bsdf_pdf * pow2(dist_to_light) / cos_theta;
 
@@ -266,11 +266,11 @@ extern "C" __device__ void __raygen__pinhole()
 
                 // Evaluate PDF depends on BSDF
                 float bsdf_pdf = optixDirectCall<float, SurfaceInteraction*, void*, const Vec3f&>(
-                    si.surface_info.callable_id.pdf, &si, si.surface_info.data, si.wi);
+                    si.surface_info->callable_id.pdf, &si, si.surface_info->data, si.wi);
 
                 // Evaluate BSDF
                 Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*, const Vec3f&>(
-                    si.surface_info.callable_id.bsdf, &si, si.surface_info.data, si.wi);
+                    si.surface_info->callable_id.bsdf, &si, si.surface_info->data, si.wi);
 
                 throughput *= bsdf / bsdf_pdf;
 #endif
@@ -331,7 +331,7 @@ extern "C" __device__ void __miss__envmap()
     const float v = 1.0f - (theta + math::pi / 2.0f) / math::pi;
     si->shading.uv = Vec2f(u, v);
     si->trace_terminate = true;
-    si->surface_info.type = SurfaceType::None;
+    si->surface_info->type = SurfaceType::None;
     si->emission = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
         env->texture.prg_id, si, env->texture.data);
 }
@@ -404,7 +404,7 @@ extern "C" __device__ void __closesthit__plane()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = uv;
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
     si->shading.dpdu = optixTransformNormalFromObjectToWorldSpace({1.0f, 0.0f, 0.0f});
     si->shading.dpdv = optixTransformNormalFromObjectToWorldSpace({0.0f, 0.0f, 1.0f});
 }
@@ -538,7 +538,7 @@ extern "C" __device__ void __closesthit__sphere() {
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = pgGetSphereUV(local_n);
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
 
     float phi = atan2(local_n.z(), local_n.x());
     if (phi < 0) phi += 2.0f * math::pi;
@@ -618,7 +618,7 @@ extern "C" __device__ void __closesthit__mesh()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = texcoords;
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
 
     Vec3f dpdu, dpdv;
     const Vec2f duv02 = texcoord0 - texcoord2, duv12 = texcoord1 - texcoord2;
@@ -820,7 +820,7 @@ extern "C" __device__ Vec3f __continuation_callable__bsdf_disney(SurfaceInteract
     const float LdotH /* = VdotH */ = dot(L, H);
 
     const Vec3f base_color = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
-        disney->base.prg_id, si, disney->base.data);
+        disney->albedo.prg_id, si, disney->albedo.data);
     si->albedo = base_color;
 
     // Diffuse term (diffuse, subsurface, sheen) ======================

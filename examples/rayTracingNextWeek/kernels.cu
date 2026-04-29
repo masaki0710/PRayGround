@@ -90,42 +90,42 @@ extern "C" __device__ void __raygen__pinhole()
                 normal = si.shading.n;
 
             // Get emission from area emitter
-            if ( si.surface_info.type == SurfaceType::AreaEmitter )
+            if ( si.surface_info->type == SurfaceType::AreaEmitter )
             {
                 // Evaluating emission from emitter
                 optixDirectCall<void, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.bsdf, &si, si.surface_info.data);
+                    si.surface_info->callable_id.bsdf, &si, si.surface_info->data);
 
                 result += si.emission * throughput;
                 if (si.trace_terminate)
                     break;
             }
             // Specular sampling
-            else if (+(si.surface_info.type & SurfaceType::Delta))
+            else if (+(si.surface_info->type & SurfaceType::Delta))
             {
                 // Sampling scattered direction
                 optixDirectCall<void, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.sample, &si, si.surface_info.data);
+                    si.surface_info->callable_id.sample, &si, si.surface_info->data);
                 
                 // Evaluate bsdf
                 Vec3f bsdf_val = optixContinuationCall<Vec3f, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.bsdf, &si, si.surface_info.data);
+                    si.surface_info->callable_id.bsdf, &si, si.surface_info->data);
                 throughput *= bsdf_val;
             }
             // Rough surface sampling with applying MIS
-            else if ( +(si.surface_info.type & (SurfaceType::Rough | SurfaceType::Diffuse)) )
+            else if ( +(si.surface_info->type & (SurfaceType::Rough | SurfaceType::Diffuse)) )
             {
                 // Importance sampling according to the BSDF
                 optixDirectCall<void, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.sample, &si, si.surface_info.data);
+                    si.surface_info->callable_id.sample, &si, si.surface_info->data);
 
                 // Evaluate PDF of area emitter
                 float pdf = optixDirectCall<float, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.pdf, &si, si.surface_info.data);
+                    si.surface_info->callable_id.pdf, &si, si.surface_info->data);
 
                 // Evaluate BSDF
                 Vec3f bsdf = optixContinuationCall<Vec3f, SurfaceInteraction*, void*>(
-                    si.surface_info.callable_id.bsdf, &si, si.surface_info.data);
+                    si.surface_info->callable_id.bsdf, &si, si.surface_info->data);
 
                 if (pdf <= 0.0f) break;
 
@@ -186,7 +186,7 @@ extern "C" __device__ void __miss__envmap()
     float v = 1.0f - (theta + math::pi / 2.0f) * math::inv_pi;
     si->shading.uv = Vec2f(u, v);
     si->trace_terminate = true;
-    si->surface_info.type = SurfaceType::None;
+    si->surface_info->type = SurfaceType::None;
     si->emission = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
         env->texture.prg_id, si, env->texture.data);
 }
@@ -253,7 +253,7 @@ extern "C" __device__ void __closesthit__plane()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = uv;
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
 
     si->shading.dpdu = optixTransformNormalFromObjectToWorldSpace(Vec3f(1, 0, 0));
     si->shading.dpdv = optixTransformNormalFromObjectToWorldSpace(Vec3f(0, 0, 1));
@@ -406,7 +406,7 @@ extern "C" __device__ void __closesthit__sphere() {
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = pgGetSphereUV(local_n);
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
 
     // Calculate partial derivative on texture coordinates
     float phi = atan2(local_n.z(), local_n.x());
@@ -573,7 +573,7 @@ extern "C" __device__ void __closesthit__box()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = uv;
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
 
     uint32_t hit_axis = getAttribute<5>();
     Vec3f dpdu, dpdv;
@@ -634,7 +634,7 @@ extern "C" __device__ void __closesthit__mesh()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = texcoords;
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
 
     // Calculate partial derivative on texture coordinates
     Vec3f dpdu, dpdv;
@@ -770,7 +770,7 @@ extern "C" __device__ void __direct_callable__sample_disney(SurfaceInteraction* 
 extern "C" __device__ Vec3f __continuation_callable__bsdf_disney(SurfaceInteraction* si, void* mat_data)
 {   
     const Disney::Data* disney = reinterpret_cast<Disney::Data*>(mat_data);
-    const Vec3f base = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(disney->base.prg_id, si, disney->base.data);
+    const Vec3f base = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(disney->albedo.prg_id, si, disney->albedo.data);
     return pgGetDisneyBRDF(disney, si->wo, si->wi, si->shading, base);
 }
 

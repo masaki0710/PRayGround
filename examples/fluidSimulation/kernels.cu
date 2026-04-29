@@ -61,33 +61,33 @@ extern "C" __device__ void __raygen__pinhole() {
             }
 
             // Get emission from area emitter
-            if (si.surface_info.type == SurfaceType::AreaEmitter) {
+            if (si.surface_info->type == SurfaceType::AreaEmitter) {
                 // Evaluating emission from emitter
-                optixDirectCall<void, SurfaceInteraction*, void*>(si.surface_info.callable_id.bsdf, &si, si.surface_info.data);
+                optixDirectCall<void, SurfaceInteraction*, void*>(si.surface_info->callable_id.bsdf, &si, si.surface_info->data);
 
                 result += throughput * si.emission;
                 if (si.trace_terminate)
                     break;
             }
             // Specular sampling
-            else if (+(si.surface_info.type & SurfaceType::Delta)) {
+            else if (+(si.surface_info->type & SurfaceType::Delta)) {
                 // Sampling scattered direction
-                optixDirectCall<void, SurfaceInteraction*, void*>(si.surface_info.callable_id.sample, &si, si.surface_info.data);
+                optixDirectCall<void, SurfaceInteraction*, void*>(si.surface_info->callable_id.sample, &si, si.surface_info->data);
 
                 // Evaluate BSDF
-                Vec3f bsdf = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(si.surface_info.callable_id.bsdf, &si, si.surface_info.data);
+                Vec3f bsdf = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(si.surface_info->callable_id.bsdf, &si, si.surface_info->data);
                 throughput *= bsdf;
             }
             // Rough surface sampling
-            else if (+(si.surface_info.type & SurfaceType::Rough)){
+            else if (+(si.surface_info->type & SurfaceType::Rough)){
                 // Sampling scattered direction
-                optixDirectCall<void, SurfaceInteraction*, void*>(si.surface_info.callable_id.sample, &si, si.surface_info.data);
+                optixDirectCall<void, SurfaceInteraction*, void*>(si.surface_info->callable_id.sample, &si, si.surface_info->data);
 
                 // Evaluate BSDF
-                Vec3f bsdf = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(si.surface_info.callable_id.bsdf, &si, si.surface_info.data);
+                Vec3f bsdf = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(si.surface_info->callable_id.bsdf, &si, si.surface_info->data);
 
                 // Evaluate PDF
-                float pdf = optixDirectCall<float, SurfaceInteraction*, void*>(si.surface_info.callable_id.pdf, &si, si.surface_info.data);
+                float pdf = optixDirectCall<float, SurfaceInteraction*, void*>(si.surface_info->callable_id.pdf, &si, si.surface_info->data);
                 throughput *= bsdf / pdf;
             }
 
@@ -130,7 +130,7 @@ extern "C" __device__ void __miss__envmap() {
 
     si->shading.uv = shading.uv;
     si->trace_terminate = true;
-    si->surface_info.type = SurfaceType::None;
+    si->surface_info->type = SurfaceType::None;
     si->emission = optixDirectCall<Vec3f, const Vec2f&, void*>(env->texture.prg_id, si->shading.uv, env->texture.data);
 }
 
@@ -177,7 +177,7 @@ extern "C" __device__ void __closesthit__custom() {
     si->shading = *shading;
     si->t = ray.tmax;
     si->wo = ray.d;
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 }
 
 // Mesh
@@ -200,7 +200,7 @@ extern "C" __device__ void __closesthit__mesh()
     si->shading = shading;
     si->t = ray.tmax;
     si->wo = ray.d;
-    si->surface_info = data->surface_info;
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 }
 
 // ------------------------------------------------------------------
