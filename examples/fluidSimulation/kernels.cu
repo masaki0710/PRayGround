@@ -145,7 +145,12 @@ extern "C" __device__ void __intersection__particle() {
     Ray ray = getLocalRay();
     Sphere::Data sphere{particle.position, particle.radius};
 
-    pgReportIntersectionSphere(&sphere, ray);
+    Shading shading;
+    float t;
+
+    if (pgIntersectionSphere(&sphere, ray, &shading, &t)) {
+        optixReportIntersection(t, 0, Vec3f_as_ints(shading.n), Vec2f_as_ints(shading.uv));
+    }
 }
 
 // Plane
@@ -155,7 +160,79 @@ extern "C" __device__ void __intersection__plane() {
 
     Ray ray = getLocalRay();
 
-    pgReportIntersectionPlane(plane, ray);
+    Shading shading;
+    float t;
+    if (pgIntersectionPlane(plane, ray, &shading, &t))
+        optixReportIntersection(t, 0, Vec3f_as_ints(shading.n), Vec2f_as_ints(shading.uv));
+}
+
+extern "C" __global__ void __closesthit__plane()
+{
+    pgHitgroupData* data = reinterpret_cast<pgHitgroupData*>(optixGetSbtDataPointer());
+
+    Ray ray = getWorldRay();
+
+    // Unpack attributes from intersection shader
+    Vec3f n = getVec3fFromAttribute<0>();
+    Vec2f uv = getVec2fFromAttribute<3>();
+
+    // Plane has fixed dpdu/dpdv in object space
+    Vec3f dpdu = Vec3f(1, 0, 0);
+    Vec3f dpdv = Vec3f(0, 0, 1);
+
+    // Transform shading frame to world space
+    n = optixTransformNormalFromObjectToWorldSpace(n);
+    dpdu = optixTransformVectorFromObjectToWorldSpace(dpdu);
+    dpdv = optixTransformVectorFromObjectToWorldSpace(dpdv);
+
+    auto* si = getPtrFromTwoPayloads<SurfaceInteraction, 0>();
+
+    si->p = ray.at(ray.tmax);
+    si->shading.n = n;
+    si->shading.uv = uv;
+    si->shading.dpdu = dpdu;
+    si->shading.dpdv = dpdv;
+    si->t = ray.tmax;
+    si->wo = -ray.d;
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
+}
+
+extern "C" __global__ void __closesthit__sphere()
+{
+    pgHitgroupData* data = reinterpret_cast<pgHitgroupData*>(optixGetSbtDataPointer());
+
+    Ray ray = getWorldRay();
+
+    // Unpack attributes from intersection shader
+    Vec3f n = getVec3fFromAttribute<0>();
+    Vec2f uv = getVec2fFromAttribute<3>();
+
+    // Compute dpdu/dpdv for sphere using parametric derivatives
+    // For sphere: phi = atan2(z, x), theta = acos(y)
+    // u = phi / (2*pi), v = theta / pi
+    // dpdu/dpdv are the derivatives with respect to texture coordinates
+    float phi = atan2(n.z(), n.x());
+    if (phi < 0) phi += math::two_pi;
+    const float theta = acosf(n.y());
+
+    Vec3f dpdu = Vec3f(-math::two_pi * n.z(), 0, math::two_pi * n.x());
+    Vec3f dpdv = math::pi * Vec3f(n.y() * cosf(phi), -sinf(theta), n.y() * sinf(phi));
+
+    // Transform shading frame to world space
+    n = optixTransformNormalFromObjectToWorldSpace(n);
+    dpdu = optixTransformVectorFromObjectToWorldSpace(dpdu);
+    dpdv = optixTransformVectorFromObjectToWorldSpace(dpdv);
+
+    auto* si = getPtrFromTwoPayloads<SurfaceInteraction, 0>();
+
+    si->p = ray.at(ray.tmax);
+    si->shading.n = n;
+    si->shading.uv = uv;
+    si->shading.dpdu = dpdu;
+    si->shading.dpdv = dpdv;
+    si->t = ray.tmax;
+    si->wo = -ray.d;
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 }
 
 extern "C" __device__ void __closesthit__custom() {

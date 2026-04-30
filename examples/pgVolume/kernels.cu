@@ -102,6 +102,8 @@ extern "C" __device__ void __raygen__medium()
                 float pdf;
                 Vec3f bsdf = optixDirectCall<Vec3f, SurfaceInteraction*, void*, float&>(
                     si.surface_info->callable_id.sample, &si, si.surface_info->data, pdf);
+                //if (!bsdf.isValid() || isnan(pdf) || isinf(pdf) || pdf < 0.0f)
+                //    printf("bsdf: %f %f %f, pdf: %f\n", bsdf.x(), bsdf.y(), bsdf.z(), pdf);
                 throughput *= bsdf / pdf;
             }
 
@@ -189,6 +191,7 @@ extern "C" __device__ Vec3f __direct_callable__sample_diffuse(SurfaceInteraction
 
     const float cosine = fmaxf(0.0f, dot(si->shading.n, si->wi));
     pdf = cosine / math::pi;
+    const Vec3f bsdf = albedo * (cosine / math::pi);
     return albedo * (cosine / math::pi);
 }
 
@@ -465,7 +468,7 @@ extern "C" __device__ void __closesthit__grid()
     
     si->t = ray.tmax;
     si->p = ray.at(ray.tmax);
-    si->shading.n = Vec3f(0,1,0);   // arbitrary
+    si->shading.n = Vec3f(0, 1, 0);   // arbitrary
     si->wo = ray.d;
     si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
     si->shading.uv = Vec2f(0.5f);  // arbitrary

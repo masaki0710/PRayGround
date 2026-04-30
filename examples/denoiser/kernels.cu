@@ -79,6 +79,9 @@ extern "C" __device__ void __raygen__pinhole()
         si.albedo = Vec3f(0.0f);
         si.shading.n = Vec3f(0.0f);
         si.trace_terminate = false;
+        SurfaceInfo surface_info = {};
+        surface_info.type = SurfaceType::None;
+        si.surface_info = &surface_info;
 
         float tmax = raygen->camera.farclip / dot(rd, normalize(raygen->camera.W));
 
@@ -268,9 +271,9 @@ extern "C" __device__ float __direct_callable__pdf_dielectric(SurfaceInteraction
 extern "C" __device__ void __direct_callable__sample_conductor(SurfaceInteraction* si, void* mat_data) {
     const auto* conductor = reinterpret_cast<Conductor::Data*>(mat_data);
     if (conductor->twosided)
-        si->shading.n = faceforward(si->shading.n, -si->wo, si->shading.n);
+        si->shading.n = faceforward(si->shading.n, si->wo, si->shading.n);
 
-    si->wi = reflect(si->wo, si->shading.n);
+    si->wi = reflect(-si->wo, si->shading.n);
     si->trace_terminate = false;
 }
 
@@ -411,9 +414,9 @@ extern "C" __device__ void __closesthit__plane()
     si->p = ray.at(ray.tmax);
     si->shading.n = world_n;
     si->t = ray.tmax;
-    si->wo = ray.d;
+    si->wo = -ray.d;
     si->shading.uv = uv;
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 
     si->shading.dpdu = optixTransformNormalFromObjectToWorldSpace(Vec3f(1, 0, 0));
     si->shading.dpdv = optixTransformNormalFromObjectToWorldSpace(Vec3f(0, 0, 1));
@@ -539,9 +542,9 @@ extern "C" __device__ void __closesthit__sphere() {
     si->p = ray.at(ray.tmax);
     si->shading.n = world_n;
     si->t = ray.tmax;
-    si->wo = ray.d;
+    si->wo = -ray.d;
     si->shading.uv = pgGetSphereUV(local_n);
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 
     float phi = atan2(local_n.z(), local_n.x());
     if (phi < 0) phi += 2.0f * math::pi;
@@ -680,9 +683,9 @@ extern "C" __device__ void __closesthit__cylinder()
     si->p = ray.at(ray.tmax);
     si->shading.n = normalize(world_n);
     si->t = ray.tmax;
-    si->wo = ray.d;
+    si->wo = -ray.d;
     si->shading.uv = uv;
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 
     // dpdu and dpdv are calculated in intersection shader
     si->shading.dpdu = normalize(optixTransformVectorFromObjectToWorldSpace(si->shading.dpdu));
@@ -708,7 +711,7 @@ extern "C" __device__ void __closesthit__mesh()
     si->p = ray.at(ray.tmax);
     si->shading = shading;
     si->t = ray.tmax;
-    si->wo = ray.d;
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->wo = -ray.d;
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 }
 

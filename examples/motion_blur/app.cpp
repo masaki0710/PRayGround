@@ -41,10 +41,11 @@ void App::setup()
 
     // パイプラインの設定
     pipeline.setLaunchVariableName("params");
-    pipeline.setDirectCallableDepth(2);
-    pipeline.setContinuationCallableDepth(2);
+    pipeline.setDirectCallableDepth(5);
+    pipeline.setContinuationCallableDepth(5);
     pipeline.setNumPayloads(5);
     pipeline.setNumAttributes(5);
+    pipeline.setMaxTraversableGraphDepth(3);
     // Motion blurを有効にする
     pipeline.enableMotionBlur();
 

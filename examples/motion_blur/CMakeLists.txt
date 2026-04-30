@@ -8,6 +8,8 @@ PRAYGROUND_add_executable(motion_blur target_name
     cuda/raygen.cu
     cuda/textures.cu
     cuda/util.cuh
+    kernels.cu
+    OPTIONS -rdc true
 )
 
 target_compile_definitions(

@@ -252,7 +252,7 @@ extern "C" __device__ void __closesthit__plane()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = uv;
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 
     si->shading.dpdu = optixTransformNormalFromObjectToWorldSpace(Vec3f(1, 0, 0));
     si->shading.dpdv = optixTransformNormalFromObjectToWorldSpace(Vec3f(0, 0, 1));
@@ -282,14 +282,12 @@ extern "C" __device__ float __continuation_callable__pdf_plane(
     return distance_squared / (cosine * area);
 }
 
-// グローバル空間における si.p -> 光源上の点 のベクトルを返す
 extern "C" __device__ Vec3f __direct_callable__rnd_sample_plane(const AreaEmitterInfo& area_info, SurfaceInteraction* si)
 {
     const Plane::Data* plane = reinterpret_cast<Plane::Data*>(area_info.shape_data);
-    // サーフェスの原点をローカル空間に移す
     const Vec3f local_p = area_info.worldToObj.pointMul(si->p);
     unsigned int seed = si->seed;
-    // 平面光源上のランダムな点を取得
+    // Get random point on light source
     const Vec3f rnd_p(rnd(seed, plane->min.x(), plane->max.x()), 0.0f, rnd(seed, plane->min.y(), plane->max.y()));
     Vec3f to_light = rnd_p - local_p;
     to_light = area_info.objToWorld.vectorMul(to_light);
@@ -405,7 +403,7 @@ extern "C" __device__ void __closesthit__sphere() {
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = pgGetSphereUV(local_n);
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 
     // Calculate partial derivative on texture coordinates
     float phi = atan2(local_n.z(), local_n.x());
@@ -572,7 +570,7 @@ extern "C" __device__ void __closesthit__box()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = uv;
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 
     uint32_t hit_axis = getAttribute<5>();
     Vec3f dpdu, dpdv;
@@ -633,7 +631,7 @@ extern "C" __device__ void __closesthit__mesh()
     si->t = ray.tmax;
     si->wo = ray.d;
     si->shading.uv = texcoords;
-    si->surface_info = const_cast<SurfaceInfo*>(&data->surface_info);
+    si->surface_info = const_cast<SurfaceInfo*>(data->surface_info);
 
     // Calculate partial derivative on texture coordinates
     Vec3f dpdu, dpdv;

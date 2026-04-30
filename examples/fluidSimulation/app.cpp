@@ -75,7 +75,7 @@ void App::setup()
     params.height = height;
     params.samples_per_launch = 8;
     params.frame = 0;
-    params.max_depth = 4;
+    params.max_depth = 12;
     params.result_buffer = (Vec4u*)result_bmp.deviceData();
     params.accum_buffer = (Vec4f*)accum_bmp.deviceData();
 
@@ -121,8 +121,8 @@ void App::setup()
 
     // Hitgroup program
     ProgramGroup mesh_prg = pipeline.createHitgroupProgram(context, module, "__closesthit__mesh");
-    ProgramGroup plane_prg = pipeline.createHitgroupProgram(context, module, "__closesthit__custom", "__intersection__plane");
-    ProgramGroup particle_prg = pipeline.createHitgroupProgram(context, module, "__closesthit__custom", "__intersection__particle");
+    ProgramGroup plane_prg = pipeline.createHitgroupProgram(context, module, "__closesthit__plane", "__intersection__plane");
+    ProgramGroup particle_prg = pipeline.createHitgroupProgram(context, module, "__closesthit__sphere", "__intersection__particle");
 
     // Surface programs
     SurfaceCallableID diffuse_id = {
@@ -144,7 +144,8 @@ void App::setup()
 
     // Create surfaces
     auto floor_bsdf = make_shared<Diffuse>(diffuse_id, make_shared<CheckerTexture>(Vec3f(0.2f), Vec3f(0.8f), 10, checker_id));
-    auto particle_bsdf = make_shared<Diffuse>(diffuse_id, make_shared<ConstantTexture>(Vec3f(0.1f, 0.5f, 0.8f), constant_id));
+    //auto particle_bsdf = make_shared<Diffuse>(diffuse_id, make_shared<ConstantTexture>(Vec3f(0.1f, 0.5f, 0.8f), constant_id));
+    auto particle_bsdf = make_shared<Dielectric>(dielectric_id, make_shared<ConstantTexture>(Vec3f(0.8f), constant_id), 1.5f);
 
     // Initialize fluid particles
     particles = make_shared<SPHParticles>();

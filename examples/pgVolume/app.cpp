@@ -61,7 +61,7 @@ void App::setup()
     params.height = result_bmp.height();
     params.samples_per_launch = 1;
     params.max_depth = 40;
-    params.cloud_opacity = 0.1f;
+    params.cloud_opacity = 0.85f;
 
     initResultBufferOnDevice();
 
@@ -105,8 +105,8 @@ void App::setup()
     // Area emitter
     uint32_t area_emitter_prg_id = setupCallable(DC_FUNC_TEXT("area_emitter"), "");
     
-    textures.emplace("env", new FloatBitmapTexture("resources/image/drackenstein_quarry_4k.exr", bitmap_prg_id));
-    //textures.emplace("env", new ConstantTexture(Vec3f(0.1f), constant_prg_id));
+    //textures.emplace("env", new FloatBitmapTexture("resources/image/drackenstein_quarry_4k.exr", bitmap_prg_id));
+    textures.emplace("env", new ConstantTexture(Vec3f(0.1f), constant_prg_id));
 
     env = EnvironmentEmitter{ textures.at("env") };
     env.copyToDevice();
@@ -190,31 +190,60 @@ void App::setup()
         createGAS(p.shape, transform);
     };
 
+    auto setupGrid = [&](ProgramGroup& prg, shared_ptr<Shape>& grid, const Matrix4f& transform, uint32_t sample_id) {
+        // Copy data to GPU
+        grid->copyToDevice();
+        grid->setSbtIndex(sbt_idx);
+        // Register data to shader binding table
+        HitgroupRecord record;
+        prg.recordPackHeader(&record);
+        record.data =
+        {
+            .shape_data = grid->devicePtr(),
+            .surface_info =
+            {
+                .data = grid->devicePtr(),
+                .callable_id = {sample_id, sample_id, sample_id},
+                .type = SurfaceType::Medium,
+            }
+        };
+
+        sbt.addHitgroupRecord({ record });
+        sbt_idx++;
+
+        createGAS(grid, transform);
+        };
+
     // Textures
     textures.emplace("floor", new CheckerTexture(Vec3f(0.8f), Vec3f(0.3f), 10, checker_prg_id));
     textures.emplace("white", new ConstantTexture(Vec3f(1.0f), constant_prg_id));
+    textures.emplace("yellow", new ConstantTexture(Vec3f(0.8f, 0.7f, 0.3f), constant_prg_id));
     textures.emplace("blue", new ConstantTexture(Vec3f(0.5f, 0.5f, 0.9f), constant_prg_id));
 
     // Materials
     materials.emplace("floor", new Diffuse({diffuse_prg_id, 0, 0}, textures.at("floor")));
+    materials.emplace("white", new Diffuse({ diffuse_prg_id, 0, 0 }, textures.at("white")));
 
     // Shapes
     shapes.emplace("floor", new Plane(Vec2f(-0.5f), Vec2f(0.5f)));
-    shapes.emplace("smoke", new VDBGrid("resources/volume/wdas_cloud_quarter.nvdb", Vec3f(0.2f), Vec3f(0.8f), 0.5f));
-    shapes.emplace("sphere", new Sphere(Vec3f(0.0f), 50.0f));
+    shapes.emplace("smoke", new VDBGrid("resources/volume/wdas_cloud_quarter.nvdb", Vec3f(0.2f), Vec3f(0.8f), 0.13f));
+    shapes.emplace("sphere", new Sphere(Vec3f(0.0f), 1.0f));
 
     // Floor
-    // Primitive floor{ shapes.at("floor"), materials.at("floor"), diffuse_prg_id };
-    // setupPrimitive(plane_prg, floor, Matrix4f::translate(0, -5, 0) * Matrix4f::scale(100));
+    Primitive floor{ shapes.at("floor"), materials.at("floor"), diffuse_prg_id };
+    setupPrimitive(plane_prg, floor, Matrix4f::translate(0, -60, 0) * Matrix4f::scale(1000));
 
     // Smoke
-    Primitive smoke{ shapes.at("smoke"), materials.at("floor"), medium_prg_id };
-    setupPrimitive(grid_prg, smoke, Matrix4f::identity());
+    setupGrid(grid_prg, shapes.at("smoke"), Matrix4f::identity(), medium_prg_id);
 
     // Emitted sphere located in Cloud
-    // auto emitter = make_shared<AreaEmitter>(textures.at("blue"), 1000.0f);
-    // Primitive sphere{ shapes.at("sphere"), emitter, area_emitter_prg_id };
-    // setupPrimitive(sphere_prg, sphere, Matrix4f::identity());
+    auto emitter = make_shared<AreaEmitter>(SurfaceCallableID{ area_emitter_prg_id, area_emitter_prg_id, area_emitter_prg_id }, textures.at("blue"), 10.0f);
+     Primitive sphere{ shapes.at("sphere"), emitter, area_emitter_prg_id };
+     setupPrimitive(sphere_prg, sphere, Matrix4f::translate(0, 50, 0) * Matrix4f::scale(50));
+
+    //auto emitter2 = make_shared<AreaEmitter>(SurfaceCallableID{ area_emitter_prg_id, area_emitter_prg_id, area_emitter_prg_id }, textures.at("white"), 100.0f);
+    // Primitive sphere2{ shapes.at("sphere"), emitter2, area_emitter_prg_id };
+    // setupPrimitive(sphere_prg, sphere2, Matrix4f::translate(-150.0f, 1000.0f, 150.0f) * Matrix4f::scale(30));
 
     CUDA_CHECK(cudaStreamCreate(&stream));
     ias.build(context, stream);

@@ -33,8 +33,8 @@ extern "C" __device__ void __closesthit__plane()
     float3 world_n = optixTransformNormalFromObjectToWorldSpace(local_n);
     world_n = normalize(world_n);
     float2 uv = make_float2(
-        int_as_float( optixGetAttribute_0() ), 
-        int_as_float( optixGetAttribute_1() )
+        __int_as_float( optixGetAttribute_0() ), 
+        __int_as_float( optixGetAttribute_1() )
     );
 
     SurfaceInteraction* si = getSurfaceInteraction();
@@ -144,9 +144,9 @@ extern "C" __device__ void __closesthit__sphere() {
     Ray ray = getWorldRay();
 
     float3 local_n = make_float3(
-        int_as_float(optixGetAttribute_0()),
-        int_as_float(optixGetAttribute_1()),
-        int_as_float(optixGetAttribute_2())
+        __int_as_float(optixGetAttribute_0()),
+        __int_as_float(optixGetAttribute_1()),
+        __int_as_float(optixGetAttribute_2())
     );
     float3 world_n = optixTransformNormalFromObjectToWorldSpace(local_n);
     world_n = normalize(world_n);

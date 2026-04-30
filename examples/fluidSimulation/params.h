@@ -4,6 +4,7 @@
 #include <prayground/math/vec.h>
 #include <prayground/texture/constant.h>
 #include <prayground/texture/checker.h>
+#include <prayground/physics/sph.h>
 
 using namespace prayground;
 
@@ -20,4 +21,6 @@ struct LaunchParams {
     Vec4u* result_buffer;
     Vec4f* accum_buffer;
     OptixTraversableHandle handle;
+
+    SPHConfig sph_config;
 };

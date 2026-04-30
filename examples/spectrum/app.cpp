@@ -354,7 +354,6 @@ void App::setup()
         setupAreaEmitter(plane_prg, plane_light, plane_area_emitter, transform, plane_sample_pdf_prg_id);
     }
 
-    // 光源データをGPU側にコピー
     CUDABuffer<AreaEmitterInfo> d_area_emitter_infos;
     d_area_emitter_infos.copyToDevice(area_emitter_infos);
     params.lights = d_area_emitter_infos.deviceData();
@@ -386,9 +385,6 @@ void App::update()
     params.frame++;
     d_params.copyToDeviceAsync(&params, sizeof(LaunchParams), stream);
 
-    pgLog("Start rendering at frame", params.frame);
-
-    // OptiX レイトレーシングカーネルの起動
     optixLaunch(
         static_cast<OptixPipeline>(pipeline),
         stream,
@@ -402,9 +398,6 @@ void App::update()
     CUDA_CHECK(cudaStreamSynchronize(stream));
     CUDA_SYNC_CHECK();
 
-    pgLog("CUDA synchronized at frame", params.frame);
-
-    // レンダリング結果をデバイスから取ってくる
     result_bitmap.copyFromDevice();
 }
 

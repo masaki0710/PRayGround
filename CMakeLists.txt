@@ -287,6 +287,7 @@ function(PRAYGROUND_add_executable target_name_base target_name_var)
   OPTIX_add_source_groups()
 
   CUDA_GET_SOURCES_AND_OPTIONS(source_files cmake_options options ${ARGN})
+  list(APPEND options "-I${PRAYGROUND_DIR}/prayground/ext")
 
   # Isolate OBJ target files. NVCC should only process these files and leave PTX targets for NVRTC
   set(cu_obj_source_files)
@@ -320,6 +321,7 @@ function(PRAYGROUND_add_executable target_name_base target_name_var)
 
   target_include_directories(${target_name} PRIVATE
     "${PRAYGROUND_DIR}"
+    "${PRAYGROUND_DIR}/prayground/ext"
     "${CMAKE_BINARY_DIR}/bin"
     "${OptiX_INCLUDE}")
   
