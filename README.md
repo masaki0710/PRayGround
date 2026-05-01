@@ -12,11 +12,11 @@ This project still remain a huge room to improve its readability, performance, a
 # :computer: Requirements
 Before building the project, please be sure to check requirements and your environment, especially if the your version of the C++ compiler supports C++20.
 
-- CUDA Toolkit (Tested : 11.1, 11.2, 11.3, 11.4, 11.8)
+- CUDA Toolkit (Tested : 12.5)
 - C++ compiler which supports C++20 
-    - Linux (Tested : g++ 10.3.0)
-    - Windows (Tested : Visual Studio 2019, version 16.10.2) 
-- OptiX 7 and 8 (Tested : 7.3 to 8.0)
+    - Linux (Tested : g++ 13.4.0)
+    - Windows (Tested : Visual Studio 2022, version 17.14.19) 
+- OptiX 8.0
 - CMake 3.0 minimum (Tested : cmake 3.16.3)
 
 **Note on CUDA 11.x and __int128_t:** CUDA 11.x's libcxx has a known issue where 128-bit integer types are instantiated in device code, causing compilation errors. The CMakeLists.txt automatically adds the `-D_LIBCUDACXX_HAS_NO_INT128` compiler flag to suppress this issue. This is compatible with both OptiX 7.x and 8.x.
@@ -32,8 +32,8 @@ git submodule update --init --recursive
 ## Linux
 Before a compilation, please be sure to export two environment variables `CC` and `CXX`. We recommend you to add them to your `~/.bashrc` file as follows so that they are automatically exported when a terminal is launched.
 ```
-export CC=gcc-10
-export CXX=g++-10
+export CC=gcc-13
+export CXX=g++-13
 ```
 Next, you can build with following command. Please be sure to set `OptiX_INCLUDE` in terminal command of ccmake or in the launched prompt.
 ```
@@ -41,7 +41,8 @@ cd <path/to/PRayGround>
 mkdir build
 cd build
 
-ccmake .. -DOptiX_INCLUDE=<path/to/OptiX>/include
+# Example: ccmake .. -DOptiX_PATH=/opt/OptiX-8.0.0
+ccmake .. -DOptiX_PATH=<path/to/OptiX>
 or 
 ccmake .. # and set OptiX_INCLUDE to the path of OptiX library include.
 # You can generate a makefile with a standard step of CMake ( [C] Configure -> [G] Generate ).
@@ -56,7 +57,7 @@ cd bin
 ```
 
 ## Windows
-On Windows, a recent version of **Visual Studio 2019** which supports C++20 features is required.
+On Windows, a recent version of **Visual Studio 2022** which supports C++20 features is required.
 
 For configuring sources, please use [cmake-gui](https://cmake.org/download/) to generate the solution files.
 
@@ -68,9 +69,9 @@ Building steps are as follows.
 
 3. Set the `<path/to/PRayGround>/build` for the binary location ( **Where to build the binaries** ).
 
-4. Press `Configure` button at the bottom of the window. When a window popped up, be careful with the settings for the platform to build. You must select **Visual Studio 16 2019** as the generator to use the recent features of C++, and specify the **x64** for the generator platform because OptiX only supports 64-bit builds.
+4. Press `Configure` button at the bottom of the window. When a window popped up, be careful with the settings for the platform to build. You must select **Visual Studio 17 2022** as the generator to use the recent features of C++, and specify the **x64** for the generator platform because OptiX only supports 64-bit builds.
 
-5. Press `Finish` button and configuration will start. If errors occur while configuring, it may be due to `OptiX_INCLUDE_NOTFOUND` error. If so, please set `OptiX_INCLUDE` to the path of Optix library include. On Windows, OptiX include directory may be located in `C:ProgramData\NVIDIA Corporation\OptiX SDK <your version>`.
+5. Press `Finish` button and configuration will start. At the configuration, please be sure to set `OptiX_PATH`. On Windows, OptiX may be located in `C:ProgramData\NVIDIA Corporation\OptiX SDK <your version>`.
 
 6. When configulation finished, press `Generate`.
 
@@ -82,13 +83,13 @@ Building steps are as follows.
 Not supported.
 
 # :bulb: Create new application
-You can create your custom application by just adding new directory in `apps/` and modifying `App.h/.cpp`, `main.cpp` and `CMakeLists.txt`. 
+You can create your custom application by just adding new directory in `apps/` and modifying `app.h/.cpp`, `main.cpp` and `CMakeLists.txt`. 
 
 The procedure is as follows:
 1. Copy and paste `apps/empty_app` directory to `apps/` and rename the directory. 
 2. Modifying the app-name in `CMakeLists.txt` inside the app directory. 
 ```
-PRAYGROUND_add_executalbe(empty_app target_name # empty_app -> <your-app-name>
+PRAYGROUND_add_executable(empty_app target_name # empty_app -> <your-app-name>
     main.cpp 
     app.cpp 
     app.h
@@ -180,6 +181,7 @@ Scene rendered with curved mesh
 
 ## [Opacity micromap](examples/opacityMicromap/)
 > :warning: This feature is supported after OptiX 7.6
+> :warning: This example is under development and it might cause some issues.
 
 Example to build opacity micromap from texture with alpha value
 
