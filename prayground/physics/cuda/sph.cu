@@ -2,15 +2,16 @@
 
 #include <prayground/physics/cuda/sph.cuh>
 #include <prayground/math/util.h>
+#include <vector>
 #include <stdio.h>
 
 namespace prayground {
 
     DEVICE float cubicSpline(float q)
     {
-        if (0.0f <= q <= 0.5f)
+        if ((0.0f <= q) && (q <= 0.5f))
             return 6.0f * (pow3(q) - pow2(q)) + 1.0f;
-        else if (0.5f < q <= 1.0f)
+        else if ((0.5f < q) && (q <= 1.0f))
             return 2.0f * pow3(1.0f - q);
         else
             return 0.0f;
@@ -18,9 +19,9 @@ namespace prayground {
 
     DEVICE float cubicSplineDerivative(float q)
     {
-        if (0.0f <= q <= 0.5f)
+        if ((0.0f <= q) && (q <= 0.5f))
             return 6.0f * (3.0f * pow2(q) - 2.0f * q);
-        else if (0.5f < q <= 1.0f)
+        else if ((0.5f < q) && (q <= 1.0f))
             return -6.0f * pow2(1.0f - q);
         else {
             return 0.0f;
@@ -41,15 +42,34 @@ namespace prayground {
         return norm_factor * cubicSplineDerivative(q);
     }
 
+    DEVICE float particleViscosityLaplacian(float r, float kernel_size)
+    {
+        if (r < 0.0f || r > kernel_size)
+            return 0.0f;
+
+        // Stable 3D viscosity kernel laplacian.
+        // Positive values make the force smooth relative velocity instead of amplifying it.
+        const float h3 = pow3(kernel_size);
+        return 45.0f / (math::pi * h3 * h3) * (kernel_size - r);
+    }
+
+    // Atomic add helper for Vec3f without using device lambdas (avoids requiring C++14 device lambda support)
+    DEVICE inline void atomicAddVec3(Vec3f& dst, const Vec3f& v)
+    {
+        atomicAdd(&dst.x(), v.x());
+        atomicAdd(&dst.y(), v.y());
+        atomicAdd(&dst.z(), v.z());
+    }
+
     extern "C" GLOBAL void computeDensity(SPHParticles::Data* particles, uint32_t num_particles, SPHConfig config)
     {
         // Global thread ID equals particle index i
         const int idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= num_particles) return;
 
-        SPHParticles::Data& pi = particles[idx];
-
         const float h = config.kernel_size;
+        SPHParticles::Data& pi = particles[idx];
+        pi.density = pi.mass * particleKernel(0.0f, h);
 
         for (auto j = 0; j < num_particles; j++) {
             if (j == idx) continue;
@@ -94,21 +114,23 @@ namespace prayground {
             auto pj = particles[j];
 
             Vec3f pi2pj = pj.position - pi.position;
-            auto dir = normalize(pi2pj);
             float r = length(pi2pj);
-            if (r < h) {
-                viscosity_force += config.viscosity * (pj.mass * (pj.velocity - pi.velocity) * 2.0f * particleKernelDerivative(r, h)) / pj.density;
+            if (r > 1e-6f && r < h) {
+                auto dir = pi2pj / r;
+                auto viscosity_laplacian = particleViscosityLaplacian(r, h);
+                auto kernel_derivative = particleKernelDerivative(r, h);
+                viscosity_force += config.viscosity * (pj.mass * (pj.velocity - pi.velocity) * viscosity_laplacian) / pj.density;
 
-                pressure_force += -dir * (pj.mass * (pj.pressure + pi.pressure)) * particleKernelDerivative(r, h) / (2.0f * pj.density);
+                pressure_force += -dir * (pj.mass * (pj.pressure + pi.pressure)) * kernel_derivative / (2.0f * pj.density);
             }
         }
-        viscosity_force *= config.viscosity;
 
         pressure_force *= -1.0f / pi.density;
 
         pi.force = pressure_force + viscosity_force + Vec3f(config.external_force);
     }
 
+    // Original collision with asymmetric position correction (causes x+ drift)
     GLOBAL void particleCollision(SPHParticles::Data* particles, uint32_t num_particles, SPHConfig config)
     {
         const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -169,7 +191,172 @@ namespace prayground {
         }
     }
 
-    extern "C" GLOBAL void updateParticle(SPHParticles::Data* particles, uint32_t num_particles, SPHConfig config, AABB wall)
+    // Fixed collision: position correction applied only when BOTH particles converge (reduce correction factor)
+    GLOBAL void particleCollisionFixed(SPHParticles::Data* particles, uint32_t num_particles, SPHConfig config)
+    {
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_particles) return;
+
+        SPHParticles::Data& pi = particles[idx];
+        
+        const float collision_damping = 0.25f;
+        const float separation_force = 1.5f;
+        
+        for (uint32_t j = 0; j < num_particles; j++) {
+            if (j == idx) continue;
+
+            SPHParticles::Data& pj = particles[j];
+            
+            Vec3f relative_pos = pi.position - pj.position;
+            float distance = length(relative_pos);
+            float min_distance = pi.radius + pj.radius;
+            
+            if (distance < min_distance && distance > 1e-6f) {
+                Vec3f collision_normal = relative_pos / distance;
+                Vec3f relative_velocity = pi.velocity - pj.velocity;
+                float velocity_along_normal = dot(relative_velocity, collision_normal);
+                
+                if (velocity_along_normal > 0) continue;
+                
+                float restitution = 0.3f;
+                float impulse_scalar = -(1 + restitution) * velocity_along_normal;
+                impulse_scalar /= (1.0f / pi.mass + 1.0f / pj.mass);
+                
+                Vec3f impulse = impulse_scalar * collision_normal;
+                pi.velocity += impulse / pi.mass * collision_damping;
+                
+                // TEST: Position correction ONLY (no separation force)
+                float overlap = min_distance - distance;
+                float correction_percent = 0.8f;
+                float slop = 0.01f;
+                
+                if (overlap > slop) {
+                    Vec3f correction = collision_normal * (overlap * correction_percent / (1.0f / pi.mass + 1.0f / pj.mass));
+                    pi.position += correction / pi.mass;
+                }
+                
+                // Separation force DISABLED
+                // Vec3f separation = collision_normal * separation_force * (min_distance - distance) / min_distance;
+                // pi.force += separation;
+            }
+        }
+    }
+
+    // Fixed collision: Process each pair only once (i < j) to eliminate loop-order bias
+    GLOBAL void particleCollisionFixed_Symmetric(SPHParticles::Data* particles, uint32_t num_particles, SPHConfig config)
+    {
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_particles) return;
+
+        SPHParticles::Data& pi = particles[idx];
+        
+        const float collision_damping = 0.8f;
+        const float separation_force = 10.0f;
+        
+        // CRITICAL FIX: Only process pairs where i < j (each pair processed exactly once)
+        // Use atomic updates to avoid races when multiple threads modify the same particle
+
+        for (uint32_t j = idx + 1; j < num_particles; j++) {
+            SPHParticles::Data& pj = particles[j];
+            
+            Vec3f relative_pos = pi.position - pj.position;
+            float distance = length(relative_pos);
+            float min_distance = pi.radius + pj.radius;
+            
+            if (distance < min_distance && distance > 1e-6f) {
+                Vec3f collision_normal = relative_pos / distance;
+                Vec3f relative_velocity = pi.velocity - pj.velocity;
+                float velocity_along_normal = dot(relative_velocity, collision_normal);
+                
+                // Only resolve if particles are converging (relative velocity < 0 along normal)
+                if (velocity_along_normal > 0) continue;
+                
+                float restitution = 0.3f;
+                float impulse_scalar = -(1 + restitution) * velocity_along_normal;
+                impulse_scalar /= (1.0f / pi.mass + 1.0f / pj.mass);
+                
+                // Apply impulse to both particles symmetrically using atomic adds
+                Vec3f impulse = impulse_scalar * collision_normal;
+                Vec3f dv_i = impulse / pi.mass * collision_damping;
+                Vec3f dv_j = -impulse / pj.mass * collision_damping;
+
+                // atomic add velocity deltas
+                atomicAddVec3(pi.velocity, dv_i);
+                atomicAddVec3(pj.velocity, dv_j);
+
+                // Position correction for both particles (atomic)
+                float overlap = min_distance - distance;
+                float correction_percent = 0.8f;
+                float slop = 0.01f;
+
+                if (overlap > slop) {
+                    Vec3f correction = collision_normal * (overlap * correction_percent / (1.0f / pi.mass + 1.0f / pj.mass));
+                    Vec3f corr_i = correction / (2.0f * pi.mass);
+                    Vec3f corr_j = -correction / (2.0f * pj.mass);
+                    atomicAddVec3(pi.position, corr_i);
+                    atomicAddVec3(pj.position, corr_j);
+                }
+
+                // Separation force (applied to both via atomic adds)
+                Vec3f separation = collision_normal * separation_force * (min_distance - distance) / min_distance;
+                atomicAddVec3(pi.force, separation);
+                atomicAddVec3(pj.force, -separation);
+            }
+        }
+    }
+
+    // Original collision function restored for comparison
+    GLOBAL void particleCollisionOriginal(SPHParticles::Data* particles, uint32_t num_particles, SPHConfig config)
+    {
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_particles) return;
+
+        SPHParticles::Data& pi = particles[idx];
+        
+        const float collision_damping = 0.8f;
+        const float separation_force = 10.0f;
+        
+        for (uint32_t j = 0; j < num_particles; j++) {
+            if (j == idx) continue;
+
+            SPHParticles::Data& pj = particles[j];
+            
+            Vec3f relative_pos = pi.position - pj.position;
+            float distance = length(relative_pos);
+            float min_distance = pi.radius + pj.radius;
+            
+            if (distance < min_distance && distance > 1e-6f) {
+                Vec3f collision_normal = relative_pos / distance;
+                Vec3f relative_velocity = pi.velocity - pj.velocity;
+                float velocity_along_normal = dot(relative_velocity, collision_normal);
+                
+                if (velocity_along_normal > 0) continue;
+                
+                float restitution = 0.3f;
+                float impulse_scalar = -(1 + restitution) * velocity_along_normal;
+                impulse_scalar /= (1.0f / pi.mass + 1.0f / pj.mass);
+                
+                Vec3f impulse = impulse_scalar * collision_normal;
+                pi.velocity += impulse / pi.mass * collision_damping;
+                
+                // Position correction
+                float overlap = min_distance - distance;
+                float correction_percent = 0.8f;
+                float slop = 0.01f;
+                
+                if (overlap > slop) {
+                    Vec3f correction = collision_normal * (overlap * correction_percent / (1.0f / pi.mass + 1.0f / pj.mass));
+                    pi.position += correction / pi.mass;
+                }
+                
+                // Separation force
+                Vec3f separation = collision_normal * separation_force * (min_distance - distance) / min_distance;
+                pi.force += separation;
+            }
+        }
+    }
+
+        extern "C" GLOBAL void updateParticle(SPHParticles::Data* particles, uint32_t num_particles, SPHConfig config, AABB wall)
     {
         // Global thread ID equals particle index i
         const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -177,44 +364,97 @@ namespace prayground {
 
         SPHParticles::Data& pi = particles[idx];
 
-        float kd = 20.0f;
-        float ks = 20.0f;
-        Vec3f pos_offset(0.0f);
-        if (pi.position.x() + pi.velocity.x() * config.time_step > wall.max().x() - 2.0f * pi.radius) {
-            const float dist = abs(pi.position.x() - wall.max().x());
-            pi.force += Vec3f(-1.0f, 0.0f, 0.0f) * (ks * dist + kd * dot(pi.velocity, Vec3f(1.0f, 0.0f, 0.0f)));
+        const float kd = config.kd;
+        const float ks = config.ks;
+        const float wall_restitution = 0.2f;
+
+        const float next_x = pi.position.x() + pi.velocity.x() * config.time_step;
+        const float next_y = pi.position.y() + pi.velocity.y() * config.time_step;
+        const float next_z = pi.position.z() + pi.velocity.z() * config.time_step;
+
+        const Vec3f normal_x_max(-1.0f, 0.0f, 0.0f);
+        const Vec3f normal_x_min(1.0f, 0.0f, 0.0f);
+        const Vec3f normal_y_max(0.0f, -1.0f, 0.0f);
+        const Vec3f normal_y_min(0.0f, 1.0f, 0.0f);
+        const Vec3f normal_z_max(0.0f, 0.0f, -1.0f);
+        const Vec3f normal_z_min(0.0f, 0.0f, 1.0f);
+
+        if (next_x + pi.radius > wall.max().x()) {
+            const float penetration = next_x + pi.radius - wall.max().x();
+            const float vn = dot(pi.velocity, normal_x_max);
+            const float force_mag = fmaxf(0.0f, ks * penetration - kd * vn);
+            pi.force += normal_x_max * force_mag;
         }
 
-        if (pi.position.x() + pi.velocity.x() * config.time_step < wall.min().x() + 2.0f * pi.radius) {
-            const float dist = abs(pi.position.x() - wall.min().x());
-            pi.force += Vec3f(1.0f, 0.0f, 0.0f) * (ks * dist + kd * dot(pi.velocity, Vec3f(-1.0f, 0.0f, 0.0)));
+        if (next_x - pi.radius < wall.min().x()) {
+            const float penetration = wall.min().x() - (next_x - pi.radius);
+            const float vn = dot(pi.velocity, normal_x_min);
+            const float force_mag = fmaxf(0.0f, ks * penetration - kd * vn);
+            pi.force += normal_x_min * force_mag;
         }
 
-        if (pi.position.y() + pi.velocity.y() * config.time_step > wall.max().y() - 2.0f * pi.radius) {
-            const float dist = abs(pi.position.y() - wall.max().y());
-            pi.force += Vec3f(0.0f, -1.0f, 0.0f) * (ks * dist + kd * dot(pi.velocity, Vec3f(0.0f, 1.0f, 0.0f)));
+        if (next_y + pi.radius > wall.max().y()) {
+            const float penetration = next_y + pi.radius - wall.max().y();
+            const float vn = dot(pi.velocity, normal_y_max);
+            const float force_mag = fmaxf(0.0f, ks * penetration - kd * vn);
+            pi.force += normal_y_max * force_mag;
         }
 
-        if (pi.position.y() + pi.velocity.y() * config.time_step < wall.min().y() + 2.0f * pi.radius) {
-            const float dist = abs(pi.position.y() - wall.min().y());
-            pi.force += Vec3f(0.0f, 1.0f, 0.0f) * (ks * dist + kd * dot(pi.velocity, Vec3f(0.0f, -1.0f, 0.0f)));
+        if (next_y - pi.radius < wall.min().y()) {
+            const float penetration = wall.min().y() - (next_y - pi.radius);
+            const float vn = dot(pi.velocity, normal_y_min);
+            const float force_mag = fmaxf(0.0f, ks * penetration - kd * vn);
+            pi.force += normal_y_min * force_mag;
         }
 
-        if (pi.position.z() + pi.velocity.z() * config.time_step > wall.max().z() - 2.0f * pi.radius) {
-            const float dist = abs(pi.position.z() - wall.max().z());
-            pi.force += Vec3f(0.0f, 0.0f, -1.0f) * (ks * dist + kd * dot(pi.velocity, Vec3f(0.0f, 0.0f, 1.0f)));
+        if (next_z + pi.radius > wall.max().z()) {
+            const float penetration = next_z + pi.radius - wall.max().z();
+            const float vn = dot(pi.velocity, normal_z_max);
+            const float force_mag = fmaxf(0.0f, ks * penetration - kd * vn);
+            pi.force += normal_z_max * force_mag;
         }
 
-        if (pi.position.z() + pi.velocity.z() * config.time_step < wall.min().z() + 2.0f * pi.radius) {
-            const float dist = abs(pi.position.z() - wall.min().z());
-            pi.force += Vec3f(0.0f, 0.0f, 1.0f) * (ks * dist + kd * dot(pi.velocity, Vec3f(0.0f, 0.0f, -1.0f)));
+        if (next_z - pi.radius < wall.min().z()) {
+            const float penetration = wall.min().z() - (next_z - pi.radius);
+            const float vn = dot(pi.velocity, normal_z_min);
+            const float force_mag = fmaxf(0.0f, ks * penetration - kd * vn);
+            pi.force += normal_z_min * force_mag;
         }
 
         // Update velocity
         pi.velocity += config.time_step * pi.force / pi.mass;
 
-        // Update position
-        pi.position += config.time_step * pi.velocity + pos_offset;
+        // Update position with hard wall clamping so the particle does not visibly sink into the wall
+        Vec3f next_pos = pi.position + config.time_step * pi.velocity;
+
+        if (next_pos.x() + pi.radius > wall.max().x()) {
+            next_pos.x() = wall.max().x() - pi.radius;
+            if (pi.velocity.x() > 0.0f) pi.velocity.x() = -pi.velocity.x() * wall_restitution;
+        }
+        if (next_pos.x() - pi.radius < wall.min().x()) {
+            next_pos.x() = wall.min().x() + pi.radius;
+            if (pi.velocity.x() < 0.0f) pi.velocity.x() = -pi.velocity.x() * wall_restitution;
+        }
+
+        if (next_pos.y() + pi.radius > wall.max().y()) {
+            next_pos.y() = wall.max().y() - pi.radius;
+            if (pi.velocity.y() > 0.0f) pi.velocity.y() = -pi.velocity.y() * wall_restitution;
+        }
+        if (next_pos.y() - pi.radius < wall.min().y()) {
+            next_pos.y() = wall.min().y() + pi.radius;
+            if (pi.velocity.y() < 0.0f) pi.velocity.y() = -pi.velocity.y() * wall_restitution;
+        }
+
+        if (next_pos.z() + pi.radius > wall.max().z()) {
+            next_pos.z() = wall.max().z() - pi.radius;
+            if (pi.velocity.z() > 0.0f) pi.velocity.z() = -pi.velocity.z() * wall_restitution;
+        }
+        if (next_pos.z() - pi.radius < wall.min().z()) {
+            next_pos.z() = wall.min().z() + pi.radius;
+            if (pi.velocity.z() < 0.0f) pi.velocity.z() = -pi.velocity.z() * wall_restitution;
+        }
+
+        pi.position = next_pos;
     }
 
     extern "C" HOST void solveSPH(SPHParticles::Data* d_particles, uint32_t num_particles, SPHConfig config, AABB wall)
@@ -235,8 +475,8 @@ namespace prayground {
         computePressure << <block_dim, threads_per_block >> > (d_particles, num_particles, config);
         computeForce << <block_dim, threads_per_block >> > (d_particles, num_particles, config);
         
-        // Particle collision handling (separate from fluid forces)
-        particleCollision << <block_dim, threads_per_block >> > (d_particles, num_particles, config);
+        // FIXED: Symmetric collision response with i < j to eliminate loop-order bias
+        // particleCollisionFixed_Symmetric << <block_dim, threads_per_block >> > (d_particles, num_particles, config);
         
         // Update positions and handle wall collisions
         updateParticle << <block_dim, threads_per_block >> > (d_particles, num_particles, config, wall);

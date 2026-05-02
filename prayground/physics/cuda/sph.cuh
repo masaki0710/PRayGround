@@ -9,6 +9,24 @@ namespace prayground {
         AABB wall = AABB(Vec3f(-10000), Vec3f(10000))
     );
 
+    // New pipeline entry for alternative SPH implementation
+    extern "C" HOST void solveSPHNew(
+        SPHParticles::Data* d_particles,
+        uint32_t num_particles,
+        SPHConfig config,
+        AABB wall = AABB(Vec3f(-10000), Vec3f(10000))
+    );
+
+    extern "C" HOST void solveSPHDebug(
+        SPHParticles::Data* d_particles,
+        uint32_t num_particles,
+        SPHConfig config,
+        AABB wall,
+        const int* watched_particle_ids,
+        uint32_t watched_particle_count,
+        int frame_index
+    );
+
     extern "C" HOST void updateParticleAABB(
         const SPHParticles::Data * particles,
         uint32_t num_particles,

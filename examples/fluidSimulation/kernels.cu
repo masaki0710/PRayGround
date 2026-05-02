@@ -325,6 +325,31 @@ extern "C" __device__ float __direct_callable__pdf_dielectric(SurfaceInteraction
     return 1.0f;
 }
 
+// Conductor --------------------------------------------------------------------------------------------
+extern "C" __device__ void __direct_callable__sample_conductor(SurfaceInteraction* si, void* mat_data) {
+    const Conductor::Data* conductor = reinterpret_cast<Conductor::Data*>(mat_data);
+    if (conductor->twosided)
+        si->shading.n = faceforward(si->shading.n, si->wo, si->shading.n);
+
+    si->wi = reflect(-si->wo, si->shading.n);
+    si->trace_terminate = false;
+}
+
+extern "C" __device__ Vec3f __direct_callable__bsdf_conductor(SurfaceInteraction* si, void* mat_data)
+{
+    const Conductor::Data* conductor = reinterpret_cast<Conductor::Data*>(mat_data);
+    si->emission = Vec3f(0.0f);
+    Vec3f albedo = optixDirectCall<Vec3f, SurfaceInteraction*, void*>(
+        conductor->texture.prg_id, si, conductor->texture.data);
+    si->albedo = albedo;
+    return albedo;
+}
+
+extern "C" __device__ float __direct_callable__pdf_conductor(SurfaceInteraction* si, void* mat_data)
+{
+    return 1.0f;
+}
+
 // Area emitter
 extern "C" __device__ Vec3f __direct_callable__area_emitter(SurfaceInteraction* si, void* data)
 {
