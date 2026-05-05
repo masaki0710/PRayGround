@@ -88,6 +88,7 @@ namespace prayground {
         void addFaces(const std::vector<Face>& faces);
         void addFaces(const std::vector<Face>& faces, const std::vector<uint32_t>& sbt_indices);
         void addNormals(const std::vector<Vec3f>& normals);
+        void setNormals(const std::vector<Vec3f>& normals);
         void addTexcoords(const std::vector<Vec2f>& texcoords);
 
         void addVertex(const Vec3f& v);

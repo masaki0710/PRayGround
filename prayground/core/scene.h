@@ -333,7 +333,6 @@ namespace prayground {
         for (auto& o : m_moving_objects) {
             if (o.value->shape) o.value->shape->free();
             for (auto m : o.value->materials) if (m) m->free();
-            if (o.value->instance) o.value->instance->free();
             o.value->gas.free();
         }
         m_moving_objects.clear();
@@ -348,7 +347,6 @@ namespace prayground {
         for (auto& l : m_moving_lights) {
             if (l.value->shape) l.value->shape->free();
             for (auto e : l.value->emitters) if (e) e->free();
-            if (l.value->instance) l.value->instance->free();
             l.value->gas.free();
         }
         m_moving_lights.clear();
@@ -406,10 +404,13 @@ namespace prayground {
                 m_sbt.deleteHitgroupRecord(0);
             }
 
+            m_accel.free();
+            m_sbt.updateHitgroupRecordOnDevice();
+
             m_num_lights = 0u;
+            m_current_sbt_id = 0u;
             should_accel_updated = false;
             should_sbt_updated = false;
-            m_current_sbt_id = 0u;
         }
 
     // -------------------------------------------------------------------------------
@@ -1295,13 +1296,16 @@ namespace prayground {
 
                     uint32_t ID = object.ID;
                     const uint32_t n_prim = shape->numPrimitives();
+                    PG_LOG("[SBT] object", object.name, "ID", ID, "prims", n_prim, "materials", (uint32_t)materials.size());
                     for (auto& m : materials)
                     {
                         if (!m->devicePtr())
                             m->copyToDevice();
                         for (uint32_t p = 0; p < n_prim; ++p) {
                             for (uint32_t i = 0; i < _NRay; i++) {
-                                pgHitgroupRecord& record = m_sbt.hitgroupRecord(ID + p * _NRay + i);
+                                const uint32_t record_idx = ID + p * _NRay + i;
+                                ASSERT(record_idx < m_sbt.numHitgroupRecords(), "The index out of range.");
+                                pgHitgroupRecord& record = m_sbt.hitgroupRecord(record_idx);
                                 record.data = { shape->devicePtr(), m->surfaceInfoDevicePtr() };
                             }
                         }

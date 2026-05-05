@@ -37,7 +37,7 @@ private:
     void exportSurfaceOBJ();
     void buildRealtimeSurfaceMeshBuffers();
     void updateRealtimeSurfaceMesh();
-    void rebuildSceneForMode(FluidRenderMode mode);
+    void buildSceneForMode(FluidRenderMode mode);
 
     Context context;
     CUstream stream;
@@ -76,11 +76,13 @@ private:
     int surface_grid_resolution{ 28 };
     float surface_iso_level{ 0.35f };
     float surface_support_radius_scale{ 2.2f };
+    int surface_field_smooth_iters{ 2 };
+    float surface_field_smooth_weight{ 0.35f };
 
     // Real-time surface mode (fixed topology, per-frame vertex update)
     FluidRenderMode render_mode{ FluidRenderMode::Particles };
-        FluidRenderMode requested_mode{ FluidRenderMode::Particles };
-    int surface_runtime_resolution{ 12 };
+    FluidRenderMode requested_mode{ FluidRenderMode::Particles };
+    int surface_runtime_resolution{ 16 };
     float surface_hidden_offset_y{ -100000.0f };
     std::vector<Vec3f> surface_runtime_vertices;
     std::vector<Face> surface_runtime_faces;

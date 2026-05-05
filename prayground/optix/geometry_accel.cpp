@@ -107,6 +107,8 @@ namespace prayground {
 
         d_buffer_size = gas_buffer_sizes.outputSizeInBytes;
 
+        CUDA_SYNC_CHECK();
+
         cuda_free(d_temp_buffer);
 
         if ((m_options.buildFlags & OPTIX_BUILD_FLAG_ALLOW_COMPACTION) != 0)

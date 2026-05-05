@@ -52,8 +52,8 @@ namespace prayground {
         uint32_t m_count{ 0 };
 
         std::vector<OptixInstance*> m_instances;
-        CUdeviceptr d_instances;
-        OptixBuildInput m_instance_input;
+        CUdeviceptr d_instances{ 0 };
+        OptixBuildInput m_instance_input{};
 
         CUdeviceptr d_buffer{ 0 };
         size_t d_buffer_size{ 0 };

@@ -32,9 +32,8 @@ namespace prayground {
     )
     {
         OptixBuildInput bi = {};
-        CUDABuffer<uint32_t> d_sbt_indices;
-        uint32_t* sbt_indices = new uint32_t[1];
-        sbt_indices[0] = sbt_index;
+        static CUDABuffer<uint32_t> d_sbt_indices;
+        uint32_t sbt_indices[1] = { sbt_index };
         d_sbt_indices.copyToDevice(sbt_indices, sizeof(uint32_t));
 
         OptixAabb aabb = static_cast<OptixAabb>(bound);

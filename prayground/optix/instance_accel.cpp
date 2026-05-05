@@ -83,6 +83,7 @@ namespace prayground {
             0                   // num emitted properties
         ));
 
+        CUDA_SYNC_CHECK();
         cuda_free(d_temp_buffer);
     }
 
@@ -137,8 +138,15 @@ namespace prayground {
 
     void InstanceAccel::free()
     {
+        if (d_instances) cuda_free(d_instances);
         if (d_buffer) cuda_free(d_buffer);
+        d_instances = 0;
         d_buffer_size = 0;
+        d_buffer = 0;
+        m_handle = 0;
+        m_count = 0;
+        m_instance_input = {};
+        m_instances.clear();
     }
 
     // ---------------------------------------------------------------------------

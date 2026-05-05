@@ -60,7 +60,10 @@ namespace prayground {
     {
         OptixBuildInput bi = {};
 
-        d_sbt_indices_buf.copyToDevice(m_sbt_indices);
+        std::vector<uint32_t> sbt_indices = m_sbt_indices;
+        if (sbt_indices.empty())
+            sbt_indices.assign(m_faces.size(), 0u);
+        d_sbt_indices_buf.copyToDevice(sbt_indices);
         d_sbt_indices = d_sbt_indices_buf.devicePtr();
 
         uint32_t num_materials = this->numMaterials();
@@ -91,7 +94,16 @@ namespace prayground {
     void TriangleMesh::free()
     {
         Shape::free();
-        cuda_frees(d_vertices, d_normals, d_faces, d_texcoords);
+        d_vertices_buf.free();
+        d_faces_buf.free();
+        d_normals_buf.free();
+        d_texcoords_buf.free();
+        d_sbt_indices_buf.free();
+        d_vertices = 0;
+        d_faces = 0;
+        d_normals = 0;
+        d_texcoords = 0;
+        d_sbt_indices = 0;
     }
 
     uint32_t TriangleMesh::numPrimitives() const
@@ -243,6 +255,11 @@ namespace prayground {
     void TriangleMesh::addNormals(const std::vector<Vec3f>& normals)
     {
         std::copy(normals.begin(), normals.end(), std::back_inserter(m_normals));
+    }
+
+    void TriangleMesh::setNormals(const std::vector<Vec3f>& normals)
+    {
+        m_normals = normals;
     }
 
     void TriangleMesh::addTexcoords(const std::vector<Vec2f>& texcoords)
