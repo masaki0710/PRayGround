@@ -63,21 +63,19 @@ namespace prayground {
             sbt_indices.push_back(m_sbt_index);
         }
 
-        CUDABuffer<uint32_t> d_sbt_indices;
-        d_sbt_indices.copyToDevice(sbt_indices);
+        d_sbt_indices_buf.copyToDevice(sbt_indices);
 
         std::vector<OptixAabb> aabbs(m_num_particles);
-        CUDABuffer<OptixAabb> d_aabb;
-        d_aabb.copyToDevice(aabbs);
+        d_aabb_buf.copyToDevice(aabbs);
 
         // Copy particle buffer to device at the first time. 
         // The device buffer will be updated by the kernel function of SPH. 
         if (!d_data)
             this->copyToDevice();
-         updateParticleAABB((SPHParticles::Data*)d_data, m_num_particles, d_aabb.deviceData());
-         CUDA_SYNC_CHECK();
+        updateParticleAABB((SPHParticles::Data*)d_data, m_num_particles, d_aabb_buf.deviceData());
+        CUDA_SYNC_CHECK();
 
-        d_aabb_buffer = d_aabb.devicePtr();
+        d_aabb_buffer = d_aabb_buf.devicePtr();
 
         bi.type = static_cast<OptixBuildInputType>(type());
         bi.customPrimitiveArray.aabbBuffers = &d_aabb_buffer;
@@ -85,7 +83,7 @@ namespace prayground {
         bi.customPrimitiveArray.numPrimitives = static_cast<uint32_t>(m_num_particles);
         bi.customPrimitiveArray.flags = input_flags;
         bi.customPrimitiveArray.numSbtRecords = 1u;
-        bi.customPrimitiveArray.sbtIndexOffsetBuffer = d_sbt_indices.devicePtr();
+        bi.customPrimitiveArray.sbtIndexOffsetBuffer = d_sbt_indices_buf.devicePtr();
         bi.customPrimitiveArray.sbtIndexOffsetSizeInBytes = sizeof(uint32_t);
         bi.customPrimitiveArray.sbtIndexOffsetStrideInBytes = sizeof(uint32_t);
         bi.customPrimitiveArray.primitiveIndexOffset = 0;
@@ -111,6 +109,9 @@ namespace prayground {
     void SPHParticles::free()
     {
         Shape::free();
+        d_sbt_indices_buf.free();
+        d_aabb_buf.free();
+        d_aabb_buffer = 0;
         cuda_free(d_data);
     }
 

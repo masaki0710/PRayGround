@@ -56,6 +56,13 @@ namespace prayground {
     template <class T>
     inline void CUDABuffer<T>::allocate(size_t size)
     {
+        if (size == 0) {
+            if (isAllocated())
+                free();
+            m_size = 0;
+            d_ptr = 0;
+            return;
+        }
         if (isAllocated())
             free();
         m_size = size;
@@ -81,6 +88,8 @@ namespace prayground {
     template <class T>
     inline void CUDABuffer<T>::copyToDevice(const T* data, size_t size)
     {
+        if (size == 0)
+            return;
         if (!isAllocated() || m_size != size)
             allocate(size);
     
@@ -101,6 +110,8 @@ namespace prayground {
     template <class T>
     inline void CUDABuffer<T>::copyToDeviceAsync(const T* data, size_t size, const CUstream& stream)
     {
+        if (size == 0)
+            return;
         if (!isAllocated())
             allocate(size);
     

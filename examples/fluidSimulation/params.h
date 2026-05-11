@@ -23,4 +23,7 @@ struct LaunchParams {
     OptixTraversableHandle handle;
 
     SPHConfig sph_config;
+    
+    // Render mode (0 = Particles, 1 = Surface)
+    int render_mode;
 };

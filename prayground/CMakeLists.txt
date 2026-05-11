@@ -154,8 +154,19 @@ set(sources
   # Physics ==========
   physics/sph.h
   physics/sph.cpp
-  physics/cuda/sph.cu
+  # physics/cuda/sph.cu
+  physics/cuda/sph_new.cu
   physics/cuda/sph.cuh
+  physics/cuda/field_smooth.cu
+  physics/cuda/field_smooth.cuh
+  physics/cuda/surface_field.cu
+  physics/cuda/surface_field.cuh
+  physics/cuda/surface_mesh.cu
+  physics/cuda/surface_mesh.cuh
+
+  # Shape cuda ==========
+  shape/cuda/trianglemesh_normals.cu
+  shape/cuda/trianglemesh_normals.cuh
 
   prayground.h
 )
@@ -164,7 +175,8 @@ set(pg_target "prayground")
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${sources}) 
 
 # TODO: Link CUDA libraries to the prayground target
-set(cuda_sources optix/cuda/omm.cu physics/cuda/sph.cu)
+# set(cuda_sources optix/cuda/omm.cu physics/cuda/sph.cu physics/cuda/sph_new.cu)
+set(cuda_sources optix/cuda/omm.cu physics/cuda/sph_new.cu physics/cuda/field_smooth.cu physics/cuda/surface_field.cu physics/cuda/surface_mesh.cu shape/cuda/trianglemesh_normals.cu)
 set_source_files_properties(${cuda_sources} PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ)
 OPTIX_add_source_groups()
 set(cu_obj_source_files)

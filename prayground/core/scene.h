@@ -113,6 +113,8 @@ namespace prayground {
         void setup(const AccelSettings& settings);
         // Finalize all objects in the scene
         void destroy();
+        // Reset scene to initial (empty) state and reinitialize internals
+        void reset();
 
         template <class LaunchParams>
         void launchRay(const Context& ctx, const Pipeline& ppl, LaunchParams& l_params, CUstream stream,
@@ -218,6 +220,8 @@ namespace prayground {
 
         void buildSBT();
         void updateSBT(uint32_t record_type);
+        // Remove all objects/lights and their hitgroup records but keep raygen/miss/callables
+        void clearObjects();
     private:
         template <class T>
         static std::optional<Item<T>> findItem(const std::vector<Item<T>>& items, const std::string& name)
@@ -234,13 +238,16 @@ namespace prayground {
         {
             for (auto it = items.begin(); it != items.end();) {
                 if (it->name == name) {
+                    auto deleted_item = *it;
                     items.erase(it);
-                    return *it;
+                    return deleted_item;
                 }
                 else {
                     it++;
                 }
             }
+
+            return std::nullopt;
         }
 
         AccelSettings m_ias_settings;
@@ -312,18 +319,37 @@ namespace prayground {
     {
         m_ias_settings = {};
 
-        m_envmap->free();
+        if (m_envmap)
+            m_envmap->free();
+        m_envmap = nullptr;
 
-        auto freeObjects = [&](auto& objects)
-            {
-                for (auto& o : objects) o.value->free();
-                objects.clear();
-            };
+        for (auto& o : m_objects) {
+            if (o.value->shape) o.value->shape->free();
+            for (auto m : o.value->materials) if (m) m->free();
+            if (o.value->instance) o.value->instance->free();
+        }
+        m_objects.clear();
 
-        freeObjects(m_objects);
-        freeObjects(m_moving_objects);
-        freeObjects(m_lights);
-        freeObjects(m_moving_lights);
+        for (auto& o : m_moving_objects) {
+            if (o.value->shape) o.value->shape->free();
+            for (auto m : o.value->materials) if (m) m->free();
+            o.value->gas.free();
+        }
+        m_moving_objects.clear();
+
+        for (auto& l : m_lights) {
+            if (l.value->shape) l.value->shape->free();
+            for (auto e : l.value->emitters) if (e) e->free();
+            if (l.value->instance) l.value->instance->free();
+        }
+        m_lights.clear();
+
+        for (auto& l : m_moving_lights) {
+            if (l.value->shape) l.value->shape->free();
+            for (auto e : l.value->emitters) if (e) e->free();
+            l.value->gas.free();
+        }
+        m_moving_lights.clear();
 
         m_num_lights = 0u;
 
@@ -334,6 +360,68 @@ namespace prayground {
         m_accel.free();
         m_current_sbt_id = 0u;
         d_params.free();
+        m_camera = nullptr;
+    }
+
+        // -------------------------------------------------------------------------------
+        template <DerivedFromCamera _CamT, uint32_t _NRay>
+        inline void Scene<_CamT, _NRay>::clearObjects()
+        {
+            // Free host-side resources for all objects/lights
+            // Free host-side resources for all objects/lights
+            for (auto& o : m_objects) {
+                if (o.value->shape) o.value->shape->free();
+                for (auto m : o.value->materials) if (m) m->free();
+                if (o.value->instance) o.value->instance->free();
+            }
+            m_objects.clear();
+
+            for (auto& o : m_moving_objects) {
+                if (o.value->shape) o.value->shape->free();
+                for (auto m : o.value->materials) if (m) m->free();
+                //if (o.value->instance) o.value->instance->free();
+                o.value->gas.free();
+            }
+            m_moving_objects.clear();
+
+            for (auto& l : m_lights) {
+                if (l.value->shape) l.value->shape->free();
+                for (auto e : l.value->emitters) if (e) e->free();
+                if (l.value->instance) l.value->instance->free();
+            }
+            m_lights.clear();
+
+            for (auto& l : m_moving_lights) {
+                if (l.value->shape) l.value->shape->free();
+                for (auto e : l.value->emitters) if (e) e->free();
+                //if (l.value->instance) l.value->instance->free();
+                l.value->gas.free();
+            }
+            m_moving_lights.clear();
+
+            // Remove all hitgroup records from SBT
+            while (m_sbt.numHitgroupRecords() > 0) {
+                m_sbt.deleteHitgroupRecord(0);
+            }
+
+            m_accel.free();
+            m_sbt.updateHitgroupRecordOnDevice();
+
+            m_num_lights = 0u;
+            m_current_sbt_id = 0u;
+            should_accel_updated = false;
+            should_sbt_updated = false;
+        }
+
+    // -------------------------------------------------------------------------------
+    template <DerivedFromCamera _CamT, uint32_t _NRay>
+    inline void Scene<_CamT, _NRay>::reset()
+    {
+        // Safely destroy current resources (if any) and reinitialize defaults
+        this->destroy();
+
+        // Recreate default settings and internal structures
+        this->setup();
     }
 
     // -------------------------------------------------------------------------------
@@ -569,11 +657,21 @@ namespace prayground {
         uint32_t num_prims = object.value->shape->numPrimitives();
         uint32_t offset = _NRay * num_materials * num_prims;
 
+        // Remove hitgroup SBT records that belonged to this object.
+        for (uint32_t i = 0; i < offset; ++i) {
+            m_sbt.deleteHitgroupRecord(static_cast<int>(deleted_sbt_id));
+        }
+
         // Offset SBT index in all objects
         for (auto& obj : m_objects) { if (obj.ID > deleted_sbt_id) obj.ID -= offset; }
         for (auto& obj : m_lights) { if (obj.ID > deleted_sbt_id) obj.ID -= offset; }
         for (auto& obj : m_moving_objects) { if (obj.ID > deleted_sbt_id) obj.ID -= offset; }
         for (auto& obj : m_moving_lights) { if (obj.ID > deleted_sbt_id) obj.ID -= offset; }
+
+        if (m_current_sbt_id >= offset)
+            m_current_sbt_id -= offset;
+        else
+            m_current_sbt_id = 0u;
 
         /**
          * @todo Should the SBT record corresponds to object be also deleted?
@@ -1198,13 +1296,16 @@ namespace prayground {
 
                     uint32_t ID = object.ID;
                     const uint32_t n_prim = shape->numPrimitives();
+                    PG_LOG("[SBT] object", object.name, "ID", ID, "prims", n_prim, "materials", (uint32_t)materials.size());
                     for (auto& m : materials)
                     {
                         if (!m->devicePtr())
                             m->copyToDevice();
                         for (uint32_t p = 0; p < n_prim; ++p) {
                             for (uint32_t i = 0; i < _NRay; i++) {
-                                pgHitgroupRecord& record = m_sbt.hitgroupRecord(ID + p * _NRay + i);
+                                const uint32_t record_idx = ID + p * _NRay + i;
+                                ASSERT(record_idx < m_sbt.numHitgroupRecords(), "The index out of range.");
+                                pgHitgroupRecord& record = m_sbt.hitgroupRecord(record_idx);
                                 record.data = { shape->devicePtr(), m->surfaceInfoDevicePtr() };
                             }
                         }

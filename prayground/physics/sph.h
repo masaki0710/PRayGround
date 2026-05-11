@@ -52,6 +52,8 @@ namespace prayground {
         std::unique_ptr<Data[]> m_particles;
         uint32_t m_num_particles{ 0 };
 
+        CUDABuffer<uint32_t> d_sbt_indices_buf;
+        CUDABuffer<OptixAabb> d_aabb_buf;
         CUdeviceptr d_aabb_buffer{ 0 };
 #endif // __CUDACC__
     };
